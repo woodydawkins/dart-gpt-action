@@ -7,16 +7,17 @@ from functools import lru_cache
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Query, HTTPException
 from dotenv import load_dotenv
+from typing import Any, Optional
 
 load_dotenv()
 
 app = FastAPI(
     title="DART·KRX Disclosure & Market Research API",
-    version="1.4.0",
+    version="1.5.0",
     description=(
-        "API server for connecting Custom GPT Actions to OpenDART and KRX Open API. "
-        "It supports DART-registered companies, including listed and non-listed disclosure companies, "
-        "and KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs."
+        "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
+        "and Korea Law Open API. It supports DART-registered companies, including listed and non-listed disclosure companies, "
+        "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, and legal search/article lookup."
     )
 )
 
@@ -53,6 +54,11 @@ KRX_PARAM_STOCK_CODE = os.getenv("KRX_PARAM_STOCK_CODE", "ISU_CD")
 KRX_SEND_STOCK_CODE_PARAM = os.getenv("KRX_SEND_STOCK_CODE_PARAM", "false").lower() == "true"
 
 
+LAW_OC = os.getenv("LAW_OC")
+
+LAW_SEARCH_URL = "https://www.law.go.kr/DRF/lawSearch.do"
+LAW_SERVICE_URL = "https://www.law.go.kr/DRF/lawService.do"
+
 # =========================================================
 # Root / debug
 # =========================================================
@@ -61,10 +67,11 @@ KRX_SEND_STOCK_CODE_PARAM = os.getenv("KRX_SEND_STOCK_CODE_PARAM", "false").lowe
 def root():
     return {
         "status": "ok",
-        "message": "DART·KRX Disclosure & Market Research API is running.",
+        "message": "DART·KRX·LAW Disclosure, Market & Legal Research API is running.",
         "scope": {
             "dart": "DART-registered companies, including listed and non-listed disclosure companies.",
-            "krx": "KRX market data for KOSPI, KOSDAQ, KONEX, and ETF if API URLs and key are configured."
+            "krx": "KRX market data for KOSPI, KOSDAQ, KONEX, and ETF if API URLs and key are configured.",
+            "law": "Korea Law Open API search and article lookup if LAW_OC is configured."
         },
         "endpoints": {
             "dart": [
@@ -76,6 +83,11 @@ def root():
                 "/krx/search-stock",
                 "/krx/daily-price",
                 "/krx/raw"
+            ],
+            "law": [
+                "/law/search",
+                "/law/detail",
+                "/law/article"
             ]
         }
     }
@@ -103,6 +115,11 @@ def debug_env():
         "krx_param_base_date": KRX_PARAM_BASE_DATE,
         "krx_param_stock_code": KRX_PARAM_STOCK_CODE,
         "krx_send_stock_code_param": KRX_SEND_STOCK_CODE_PARAM,
+
+        "has_law_oc": bool(LAW_OC),
+        "law_oc_length": len(LAW_OC) if LAW_OC else 0,
+        "law_search_url": LAW_SEARCH_URL,
+        "law_service_url": LAW_SERVICE_URL,
     }
 
 
@@ -171,6 +188,348 @@ def date_range_yyyymmdd(start_date: str, end_date: str):
         cur += timedelta(days=1)
 
     return dates
+
+
+
+# =========================================================
+# LAW helpers
+# =========================================================
+
+def require_law_oc() -> str:
+    """
+    국가법령정보 공동활용 API 인증값(OC) 확인.
+    .env 또는 Render 환경변수에 LAW_OC를 설정해야 합니다.
+    """
+    if not LAW_OC:
+        raise HTTPException(
+            status_code=500,
+            detail="LAW_OC가 설정되어 있지 않습니다. Render 환경변수 또는 .env 파일을 확인하세요."
+        )
+    return LAW_OC
+
+
+def normalize_law_search_response(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    국가법령정보 lawSearch JSON 응답을 GPT가 다루기 쉬운 리스트로 정규화합니다.
+    보통 data["LawSearch"]["law"] 구조이나, 단건/빈값 케이스를 방어합니다.
+    """
+    if not isinstance(data, dict):
+        return []
+
+    law_search = data.get("LawSearch") or data.get("lawSearch") or data
+    if not isinstance(law_search, dict):
+        return []
+
+    laws = law_search.get("law", [])
+    if isinstance(laws, dict):
+        laws = [laws]
+    if laws is None:
+        laws = []
+
+    result = []
+    for item in laws:
+        if not isinstance(item, dict):
+            continue
+
+        result.append({
+            "law_id": item.get("법령ID") or item.get("lawId") or item.get("ID"),
+            "mst": item.get("법령일련번호") or item.get("MST"),
+            "law_name": item.get("법령명한글") or item.get("법령명") or item.get("lawName"),
+            "law_short_name": item.get("법령약칭명") or item.get("법령약칭") or item.get("lawShortName"),
+            "law_type": item.get("법령구분명") or item.get("법령구분"),
+            "ministry": item.get("소관부처명") or item.get("소관부처"),
+            "promulgation_date": item.get("공포일자"),
+            "enforcement_date": item.get("시행일자"),
+            "revision_type": item.get("제개정구분명"),
+            "detail_link": item.get("법령상세링크"),
+            "raw": item,
+        })
+
+    return result
+
+
+def format_jo(article_no: str) -> str:
+    """
+    법제처 JO 형식 변환.
+    예:
+    - '2'      -> '000200'
+    - '10-2'   -> '001002'
+    - '18의2'  -> '001802'
+    - '제18조의2' -> '001802'
+    """
+    raw = normalize_text(article_no)
+    raw = (
+        raw.replace("제", "")
+        .replace("조", "")
+        .replace(" ", "")
+        .replace("의", "-")
+    )
+
+    if not raw:
+        raise HTTPException(status_code=400, detail="article_no를 입력하세요. 예: 18 또는 18-2")
+
+    if "-" in raw:
+        main, sub = raw.split("-", 1)
+        sub = sub or "0"
+    else:
+        main, sub = raw, "0"
+
+    try:
+        main_num = int(main)
+        sub_num = int(sub)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="article_no 형식이 올바르지 않습니다. 예: 18, 18-2, 제18조의2"
+        )
+
+    if main_num <= 0 or sub_num < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="article_no는 양수 조문번호여야 합니다. 예: 18 또는 18-2"
+        )
+
+    return f"{main_num:04d}{sub_num:02d}"
+
+
+def find_first_law(laws: list[dict[str, Any]], query: str) -> Optional[dict[str, Any]]:
+    """
+    검색 결과에서 법령명을 기준으로 가장 적절한 법령 선택.
+    1순위: 법령명 완전일치
+    2순위: 약칭 완전일치
+    3순위: 법령명 부분일치
+    4순위: 첫 번째 결과
+    """
+    q = normalize_text(query).replace(" ", "")
+
+    for law in laws:
+        name = normalize_text(law.get("law_name")).replace(" ", "")
+        if name == q:
+            return law
+
+    for law in laws:
+        short_name = normalize_text(law.get("law_short_name")).replace(" ", "")
+        if short_name == q:
+            return law
+
+    for law in laws:
+        name = normalize_text(law.get("law_name")).replace(" ", "")
+        if q and q in name:
+            return law
+
+    return laws[0] if laws else None
+
+
+def call_law_api(url: str, params: dict[str, Any]) -> requests.Response:
+    """
+    국가법령정보 API 공통 호출 함수.
+    """
+    clean_params = {
+        k: v for k, v in params.items()
+        if v is not None and str(v).strip() != ""
+    }
+
+    try:
+        res = requests.get(url, params=clean_params, timeout=30)
+        res.raise_for_status()
+        return res
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"국가법령정보 API 요청 실패: {str(e)}"
+        )
+
+
+def parse_law_response(res: requests.Response, response_type: str):
+    """
+    국가법령정보 API 응답을 response_type에 따라 반환합니다.
+    JSON은 dict/list로 반환하고, XML/HTML은 text로 반환합니다.
+    """
+    if response_type.upper() == "JSON":
+        try:
+            return res.json()
+        except ValueError:
+            raise HTTPException(
+                status_code=502,
+                detail=f"국가법령정보 API 응답이 JSON이 아닙니다. 응답 앞부분: {res.text[:500]}"
+            )
+
+    return {
+        "content_type": res.headers.get("content-type"),
+        "text": res.text,
+    }
+
+
+# =========================================================
+# LAW endpoints
+# =========================================================
+
+@app.get("/law/search")
+def search_law(
+    query: str = Query(..., description="검색할 법령명 또는 키워드. 예: 법인세법"),
+    search: int = Query(1, description="검색범위. 1=법령명, 2=본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    sort: str = Query("lasc", description="정렬옵션. 예: lasc, ldes, dasc, ddes")
+):
+    """
+    국가법령정보 현행법령 목록 검색.
+    GPT Action에서는 법령명 확인 및 law_id/MST 확인용으로 사용합니다.
+    """
+    oc = require_law_oc()
+
+    params = {
+        "OC": oc,
+        "target": "law",
+        "type": "JSON",
+        "query": query,
+        "search": search,
+        "display": display,
+        "page": page,
+        "sort": sort,
+    }
+
+    res = call_law_api(LAW_SEARCH_URL, params=params)
+    data = parse_law_response(res, "JSON")
+    laws = normalize_law_search_response(data)
+    best_law = find_first_law(laws, query)
+
+    return {
+        "query": query,
+        "search": search,
+        "page": page,
+        "display": display,
+        "count": len(laws),
+        "best_law": best_law,
+        "laws": laws,
+        "note": "법령명으로 특정 조문을 바로 조회하려면 /law/article을 사용하세요."
+    }
+
+
+@app.get("/law/detail")
+def get_law_detail(
+    law_id: Optional[str] = Query(None, description="법령ID. 예: 009682"),
+    mst: Optional[str] = Query(None, description="법령일련번호/MST"),
+    article_no: Optional[str] = Query(None, description="조문번호. 예: 18, 18-2, 제18조의2"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    """
+    법령ID 또는 MST로 현행법령 본문/특정 조문 조회.
+    law_id 또는 mst 중 하나는 필수입니다.
+    """
+    oc = require_law_oc()
+    response_type_upper = response_type.upper()
+
+    if response_type_upper not in ["JSON", "XML", "HTML"]:
+        raise HTTPException(status_code=400, detail="response_type은 JSON, XML, HTML 중 하나여야 합니다.")
+
+    if not law_id and not mst:
+        raise HTTPException(status_code=400, detail="law_id 또는 mst 중 하나는 필수입니다.")
+
+    params = {
+        "OC": oc,
+        "target": "law",
+        "type": response_type_upper,
+    }
+
+    if law_id:
+        params["ID"] = law_id
+    if mst:
+        params["MST"] = mst
+    if article_no:
+        params["JO"] = format_jo(article_no)
+
+    res = call_law_api(LAW_SERVICE_URL, params=params)
+    data = parse_law_response(res, response_type_upper)
+
+    return {
+        "law_id": law_id,
+        "mst": mst,
+        "article_no": article_no,
+        "jo": format_jo(article_no) if article_no else None,
+        "response_type": response_type_upper,
+        "data": data,
+    }
+
+
+@app.get("/law/article")
+def get_law_article(
+    law_name: str = Query(..., description="법령명. 예: 법인세법, 소득세법, 조세특례제한법"),
+    article_no: str = Query(..., description="조문번호. 예: 18, 18-2, 제18조의2"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    """
+    법령명 검색 후 가장 적절한 법령을 선택하여 특정 조문을 조회합니다.
+    GPT Action에서는 이 엔드포인트를 가장 자주 사용하면 됩니다.
+    """
+    oc = require_law_oc()
+    response_type_upper = response_type.upper()
+
+    if response_type_upper not in ["JSON", "XML", "HTML"]:
+        raise HTTPException(status_code=400, detail="response_type은 JSON, XML, HTML 중 하나여야 합니다.")
+
+    # 1. 법령명 검색
+    search_params = {
+        "OC": oc,
+        "target": "law",
+        "type": "JSON",
+        "query": law_name,
+        "search": 1,
+        "display": 10,
+        "page": 1,
+        "sort": "lasc",
+    }
+
+    search_res = call_law_api(LAW_SEARCH_URL, params=search_params)
+    search_data = parse_law_response(search_res, "JSON")
+    laws = normalize_law_search_response(search_data)
+    selected_law = find_first_law(laws, law_name)
+
+    if not selected_law:
+        raise HTTPException(status_code=404, detail=f"{law_name}에 해당하는 법령을 찾지 못했습니다.")
+
+    law_id = selected_law.get("law_id")
+    mst = selected_law.get("mst")
+
+    if not law_id and not mst:
+        raise HTTPException(
+            status_code=502,
+            detail="법령 검색 결과에 law_id 또는 mst가 포함되어 있지 않습니다."
+        )
+
+    jo = format_jo(article_no)
+
+    # 2. 특정 조문 조회
+    detail_params = {
+        "OC": oc,
+        "target": "law",
+        "type": response_type_upper,
+        "JO": jo,
+    }
+
+    if law_id:
+        detail_params["ID"] = law_id
+    else:
+        detail_params["MST"] = mst
+
+    detail_res = call_law_api(LAW_SERVICE_URL, params=detail_params)
+    detail_data = parse_law_response(detail_res, response_type_upper)
+
+    return {
+        "law_name": selected_law.get("law_name"),
+        "law_short_name": selected_law.get("law_short_name"),
+        "law_id": law_id,
+        "mst": mst,
+        "law_type": selected_law.get("law_type"),
+        "ministry": selected_law.get("ministry"),
+        "promulgation_date": selected_law.get("promulgation_date"),
+        "enforcement_date": selected_law.get("enforcement_date"),
+        "article_no": article_no,
+        "jo": jo,
+        "response_type": response_type_upper,
+        "data": detail_data,
+        "note": "과거 시행일 기준 조문 조회는 추후 target=eflaw 방식으로 별도 엔드포인트를 추가하는 것을 권장합니다."
+    }
 
 
 # =========================================================
