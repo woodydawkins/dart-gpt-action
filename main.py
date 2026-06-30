@@ -13,12 +13,12 @@ load_dotenv()
 
 app = FastAPI(
     title="DART·KRX Disclosure & Market Research API",
-    version="1.6.0",
+    version="1.7.0",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
         "and Korea Law Open API. It supports DART-registered companies, including listed and non-listed disclosure companies, "
         "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, legal search/article lookup, "
-        "and treaty search/detail lookup including tax treaties."
+        "treaty search/detail lookup, and tax-law research endpoints for cases, appeals, interpretations, administrative rules, attachments, histories, comparisons, terms, and related laws."
     )
 )
 
@@ -90,7 +90,36 @@ def root():
                 "/law/detail",
                 "/law/article",
                 "/law/treaties/search",
-                "/law/treaties/detail"
+                "/law/treaties/detail",
+                "/law/interpretations/search",
+                "/law/interpretations/detail",
+                "/law/constitutional-cases/search",
+                "/law/constitutional-cases/detail",
+                "/law/terms/search",
+                "/law/terms/detail",
+                "/law/related-laws/search"
+            ],
+            "tax": [
+                "/tax/laws/catalog",
+                "/tax/laws/search",
+                "/tax/laws/article",
+                "/tax/laws/package",
+                "/tax/laws/effective-article",
+                "/tax/laws/history",
+                "/tax/laws/article-history",
+                "/tax/laws/compare",
+                "/tax/laws/three-way-compare",
+                "/tax/cases/search",
+                "/tax/cases/detail",
+                "/tax/appeals/search",
+                "/tax/appeals/detail",
+                "/tax/nts-interpretations/search",
+                "/tax/admin-rules/search",
+                "/tax/admin-rules/detail",
+                "/tax/attachments/search",
+                "/tax/terms/search",
+                "/tax/terms/detail",
+                "/tax/related-laws/search"
             ]
         }
     }
@@ -825,6 +854,1519 @@ def get_treaty_detail(
             "LOB 조항 및 관련 예규·판례를 함께 확인해야 합니다."
         ),
     }
+
+
+
+# =========================================================
+# TAX / CASE / INTERPRETATION helpers
+# =========================================================
+
+TAX_LAW_ALIASES = {
+    # 법인세
+    "법인세": "법인세법",
+    "법인세법": "법인세법",
+    "법인세법시행령": "법인세법 시행령",
+    "법인세법시행규칙": "법인세법 시행규칙",
+
+    # 소득세
+    "소득세": "소득세법",
+    "소득세법": "소득세법",
+    "소득세법시행령": "소득세법 시행령",
+    "소득세법시행규칙": "소득세법 시행규칙",
+
+    # 부가가치세
+    "부가세": "부가가치세법",
+    "부가가치세": "부가가치세법",
+    "부가가치세법": "부가가치세법",
+    "부가가치세법시행령": "부가가치세법 시행령",
+    "부가가치세법시행규칙": "부가가치세법 시행규칙",
+
+    # 상속세 및 증여세
+    "상증세": "상속세 및 증여세법",
+    "상증세법": "상속세 및 증여세법",
+    "상속세및증여세법": "상속세 및 증여세법",
+    "상속세 및 증여세법": "상속세 및 증여세법",
+    "상증령": "상속세 및 증여세법 시행령",
+    "상속세및증여세법시행령": "상속세 및 증여세법 시행령",
+    "상속세 및 증여세법 시행령": "상속세 및 증여세법 시행령",
+    "상증칙": "상속세 및 증여세법 시행규칙",
+    "상속세및증여세법시행규칙": "상속세 및 증여세법 시행규칙",
+    "상속세 및 증여세법 시행규칙": "상속세 및 증여세법 시행규칙",
+
+    # 조세특례제한법
+    "조특법": "조세특례제한법",
+    "조세특례제한법": "조세특례제한법",
+    "조특령": "조세특례제한법 시행령",
+    "조세특례제한법시행령": "조세특례제한법 시행령",
+    "조세특례제한법 시행령": "조세특례제한법 시행령",
+    "조특칙": "조세특례제한법 시행규칙",
+    "조세특례제한법시행규칙": "조세특례제한법 시행규칙",
+    "조세특례제한법 시행규칙": "조세특례제한법 시행규칙",
+
+    # 국세기본법 / 국세징수법
+    "국기법": "국세기본법",
+    "국세기본법": "국세기본법",
+    "국세기본법시행령": "국세기본법 시행령",
+    "국세기본법 시행령": "국세기본법 시행령",
+
+    "국징법": "국세징수법",
+    "국세징수법": "국세징수법",
+    "국세징수법시행령": "국세징수법 시행령",
+    "국세징수법 시행령": "국세징수법 시행령",
+
+    # 국제조세
+    "국조법": "국제조세조정에 관한 법률",
+    "국제조세조정법": "국제조세조정에 관한 법률",
+    "국제조세조정에관한법률": "국제조세조정에 관한 법률",
+    "국제조세조정에 관한 법률": "국제조세조정에 관한 법률",
+    "국조령": "국제조세조정에 관한 법률 시행령",
+    "국제조세조정에관한법률시행령": "국제조세조정에 관한 법률 시행령",
+    "국제조세조정에 관한 법률 시행령": "국제조세조정에 관한 법률 시행령",
+
+    # 지방세
+    "지방세법": "지방세법",
+    "지방세법시행령": "지방세법 시행령",
+    "지방세법 시행령": "지방세법 시행령",
+    "지방세기본법": "지방세기본법",
+    "지방세징수법": "지방세징수법",
+
+    # 기타 주요 세법
+    "종부세법": "종합부동산세법",
+    "종합부동산세법": "종합부동산세법",
+    "증권거래세법": "증권거래세법",
+    "인지세법": "인지세법",
+    "개별소비세법": "개별소비세법",
+    "주세법": "주세법",
+    "교육세법": "교육세법",
+    "농어촌특별세법": "농어촌특별세법",
+    "관세법": "관세법",
+    "관세법시행령": "관세법 시행령",
+    "관세법 시행령": "관세법 시행령",
+}
+
+
+TAX_LAW_KEYWORDS = [
+    "세법",
+    "조세",
+    "국세",
+    "지방세",
+    "법인세",
+    "소득세",
+    "부가가치세",
+    "상속세",
+    "증여세",
+    "종합부동산세",
+    "증권거래세",
+    "인지세",
+    "개별소비세",
+    "주세",
+    "교육세",
+    "농어촌특별세",
+    "관세",
+]
+
+
+TAX_LAW_TARGETS = {
+    # 법령
+    "current_law_by_enforcement_date": "eflaw",
+    "law": "law",
+
+    # 법령 부가/이력/비교
+    # 국가법령정보 OPEN API target은 서비스별로 다르므로, 운영 중 API 응답을 보고 조정할 수 있게
+    # 아래 target명을 한 곳에서 관리합니다.
+    "law_history": "lsHst",
+    "law_article_history_by_date": "lsJoHst",
+    "law_article_history_by_article": "lsJoHst",
+    "old_and_new": "oldAndNew",
+    "three_way_compare": "threeWay",
+
+    # 판례/심판례/해석/행정규칙/별표
+    "case": "prec",
+    "tax_appeal": "ttSpecialDecc",
+    "nts_interpretation": "ntsCgmExpc",
+    "customs_interpretation": "kcsCgmExpc",
+    "legal_interpretation": "expc",
+    "constitutional_case": "detc",
+    "admin_rule": "admrul",
+    "law_attachment": "licbyl",
+
+    # 법령지식베이스
+    "law_term": "lstrm",
+    "related_law": "relatedLs",
+}
+
+
+def normalize_tax_law_key(value: str) -> str:
+    """
+    세법명/약칭 비교용 정규화.
+    공백, 가운데점, 일부 특수문자를 제거합니다.
+    """
+    text = normalize_text(value)
+    return (
+        text.replace(" ", "")
+        .replace("ㆍ", "")
+        .replace("·", "")
+        .replace(".", "")
+        .replace(",", "")
+        .replace("(", "")
+        .replace(")", "")
+    )
+
+
+def resolve_tax_law_name(law_name: str) -> str:
+    """
+    사용자가 입력한 세법 약칭을 국가법령정보 법령명으로 변환합니다.
+    예: 조특법 -> 조세특례제한법, 상증세법 -> 상속세 및 증여세법
+    """
+    key = normalize_tax_law_key(law_name)
+    if key in TAX_LAW_ALIASES:
+        return TAX_LAW_ALIASES[key]
+    return normalize_text(law_name)
+
+
+def is_tax_law_record(law: dict[str, Any]) -> bool:
+    """
+    국가법령정보 검색 결과 중 조세법령으로 볼 수 있는 항목만 필터링합니다.
+    """
+    law_name = normalize_text(law.get("law_name"))
+    law_short_name = normalize_text(law.get("law_short_name"))
+    target = f"{law_name} {law_short_name}"
+
+    if any(keyword in target for keyword in TAX_LAW_KEYWORDS):
+        return True
+
+    normalized_target = normalize_tax_law_key(target)
+    for alias_key, canonical_name in TAX_LAW_ALIASES.items():
+        if alias_key in normalized_target:
+            return True
+        if normalize_tax_law_key(canonical_name) in normalized_target:
+            return True
+
+    return False
+
+
+def search_law_items(
+    query: str,
+    search: int = 1,
+    display: int = 10,
+    page: int = 1,
+    sort: str = "lasc",
+    target: str = "law",
+    extra_params: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    """
+    국가법령정보 lawSearch.do 호출용 내부 helper.
+    기본 target은 law이지만 eflaw 등 법령계열 target도 호출할 수 있습니다.
+    """
+    oc = require_law_oc()
+
+    params = {
+        "OC": oc,
+        "target": target,
+        "type": "JSON",
+        "query": query,
+        "search": search,
+        "display": display,
+        "page": page,
+        "sort": sort,
+    }
+
+    if extra_params:
+        params.update(extra_params)
+
+    res = call_law_api(LAW_SEARCH_URL, params=params)
+    data = parse_law_response(res, "JSON")
+
+    if target in ["law", "eflaw"]:
+        return normalize_law_search_response(data)
+
+    generic = normalize_generic_legal_search_response(data)
+    return generic["items"]
+
+
+def normalize_generic_legal_search_response(data: Any) -> dict[str, Any]:
+    """
+    판례, 심판례, 해석례, 행정규칙, 별표서식, 용어 등 목록 응답을
+    GPT가 공통적으로 다룰 수 있도록 느슨하게 정규화합니다.
+    """
+    if not isinstance(data, dict):
+        return {"total_count": None, "page": None, "items": [], "raw": data}
+
+    root = data
+    # LawSearch, PrecSearch 등 루트가 하나인 케이스를 흡수
+    for key in [
+        "LawSearch", "lawSearch",
+        "PrecSearch", "precSearch",
+        "DeccSearch", "deccSearch",
+        "ExpcSearch", "expcSearch",
+        "DetcSearch", "detcSearch",
+        "AdmRulSearch", "admrulSearch",
+        "LicBylSearch", "licbylSearch",
+        "LsTrmSearch", "lstrmSearch",
+        "Search", "search"
+    ]:
+        if isinstance(data.get(key), dict):
+            root = data.get(key)
+            break
+
+    total_count = pick_first(root, "totalCnt", "totalCount", "총건수", "검색건수", "검색결과갯수")
+    page = pick_first(root, "page", "페이지", "결과페이지번호", "출력페이지")
+
+    items = find_first_list(
+        root,
+        preferred_keys=[
+            "prec", "decc", "expc", "detc", "admrul", "licbyl", "lstrm",
+            "law", "item", "items", "list", "data", "result", "results"
+        ],
+    )
+
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        normalized.append({
+            "id": pick_first(
+                item,
+                "판례일련번호", "판례정보일련번호",
+                "특별행정심판재결례일련번호", "행정심판재결례일련번호",
+                "법령해석일련번호", "헌재결정례일련번호",
+                "행정규칙일련번호", "행정규칙ID",
+                "별표일련번호", "관련법령일련번호",
+                "법령용어ID", "용어ID",
+                "ID", "id", "MST", "mst"
+            ),
+            "title": pick_first(
+                item,
+                "사건명", "안건명", "재결례명", "판례명", "헌재결정례명",
+                "법령해석례명", "법령해석명",
+                "행정규칙명", "별표명", "법령용어명", "용어명",
+                "법령명한글", "법령명", "title", "name"
+            ),
+            "case_no": pick_first(item, "사건번호", "청구번호", "안건번호", "발령번호", "공포번호", "nb", "itmno"),
+            "date": pick_first(
+                item,
+                "선고일자", "의결일자", "처분일자", "해석일자", "회신일자",
+                "종국일자", "발령일자", "시행일자", "공포일자", "등록일자",
+                "prncYd", "rslYd", "explYd", "edYd", "date"
+            ),
+            "court_or_authority": pick_first(
+                item,
+                "법원명", "처분청", "재결청", "질의기관명", "해석기관명", "회신기관명",
+                "소관부처명", "데이터출처명", "authority"
+            ),
+            "category": pick_first(
+                item,
+                "사건종류명", "재결구분명", "재결례유형명", "세목",
+                "행정규칙종류", "별표종류", "법령종류", "category"
+            ),
+            "detail_link": pick_first(
+                item,
+                "판례상세링크", "행정심판재결례상세링크", "법령해석례상세링크", "법령해석상세링크",
+                "헌재결정례상세링크", "행정규칙상세링크", "별표법령상세링크", "상세링크",
+                "detailLink", "detail_link"
+            ),
+            "file_link": pick_first(item, "별표서식파일링크", "별표서식PDF파일링크", "파일링크", "PDF파일링크"),
+            "raw": item,
+        })
+
+    return {
+        "total_count": total_count,
+        "page": page,
+        "count": len(normalized),
+        "items": normalized,
+        "raw": data,
+    }
+
+
+def call_law_search_target(
+    target: str,
+    query: str = "",
+    search: Optional[int] = 1,
+    display: int = 10,
+    page: int = 1,
+    sort: Optional[str] = None,
+    response_type: str = "JSON",
+    extra_params: Optional[dict[str, Any]] = None,
+):
+    """
+    국가법령정보 lawSearch.do target별 프록시.
+    """
+    oc = require_law_oc()
+    response_type_upper = response_type.upper()
+
+    if response_type_upper not in ["JSON", "XML", "HTML"]:
+        raise HTTPException(status_code=400, detail="response_type은 JSON, XML, HTML 중 하나여야 합니다.")
+
+    params = {
+        "OC": oc,
+        "target": target,
+        "type": response_type_upper,
+        "query": query,
+        "display": display,
+        "page": page,
+    }
+
+    if search is not None:
+        params["search"] = search
+    if sort:
+        params["sort"] = sort
+    if extra_params:
+        params.update(extra_params)
+
+    res = call_law_api(LAW_SEARCH_URL, params=params)
+    data = parse_law_response(res, response_type_upper)
+
+    if response_type_upper == "JSON":
+        normalized = normalize_generic_legal_search_response(data)
+    else:
+        normalized = None
+
+    return {
+        "target": target,
+        "query": query,
+        "search": search,
+        "page": page,
+        "display": display,
+        "sort": sort,
+        "response_type": response_type_upper,
+        "normalized": normalized,
+        "data": data,
+    }
+
+
+def call_law_service_target(
+    target: str,
+    item_id: Optional[str] = None,
+    lm: Optional[str] = None,
+    response_type: str = "JSON",
+    extra_params: Optional[dict[str, Any]] = None,
+):
+    """
+    국가법령정보 lawService.do target별 프록시.
+    ID 또는 LM 중 하나를 사용합니다.
+    """
+    oc = require_law_oc()
+    response_type_upper = response_type.upper()
+
+    if response_type_upper not in ["JSON", "XML", "HTML"]:
+        raise HTTPException(status_code=400, detail="response_type은 JSON, XML, HTML 중 하나여야 합니다.")
+
+    if not item_id and not lm and not extra_params:
+        raise HTTPException(status_code=400, detail="ID, LM 또는 추가 조회 파라미터 중 하나는 필요합니다.")
+
+    params = {
+        "OC": oc,
+        "target": target,
+        "type": response_type_upper,
+    }
+
+    if item_id:
+        params["ID"] = item_id
+    if lm:
+        params["LM"] = lm
+    if extra_params:
+        params.update(extra_params)
+
+    res = call_law_api(LAW_SERVICE_URL, params=params)
+    data = parse_law_response(res, response_type_upper)
+
+    return {
+        "target": target,
+        "id": item_id,
+        "lm": lm,
+        "response_type": response_type_upper,
+        "params_used": {k: v for k, v in params.items() if k != "OC"},
+        "data": data,
+    }
+
+
+def find_first_generic_item(normalized: Optional[dict[str, Any]], query: str = "") -> Optional[dict[str, Any]]:
+    """
+    normalize_generic_legal_search_response 결과에서 첫 번째 또는 제목 일치 항목 선택.
+    """
+    if not normalized:
+        return None
+
+    items = normalized.get("items") or []
+    if not items:
+        return None
+
+    q = normalize_text(query).replace(" ", "")
+    if not q:
+        return items[0]
+
+    for item in items:
+        title = normalize_text(item.get("title")).replace(" ", "")
+        if title == q:
+            return item
+
+    for item in items:
+        title = normalize_text(item.get("title")).replace(" ", "")
+        if q and q in title:
+            return item
+
+    return items[0]
+
+
+# =========================================================
+# TAX LAW endpoints
+# =========================================================
+
+@app.get("/tax/laws/catalog")
+def tax_law_catalog():
+    """
+    GPT가 자주 쓰는 조세법령명/약칭 목록을 반환합니다.
+    국가법령정보 API 호출 없이 서버 내부 alias 기준으로 반환합니다.
+    """
+    canonical_names = sorted(set(TAX_LAW_ALIASES.values()))
+
+    return {
+        "count": len(canonical_names),
+        "tax_laws": canonical_names,
+        "aliases": TAX_LAW_ALIASES,
+        "note": (
+            "This catalog is a server-side convenience list. "
+            "Use /tax/laws/search or /tax/laws/article to verify current law metadata from the Korea Law Open API."
+        )
+    }
+
+
+@app.get("/tax/laws/search")
+def search_tax_laws(
+    query: str = Query(..., description="검색어. 예: 법인세법, 조특법, 감가상각, 배당, 원천징수"),
+    search: int = Query(1, description="검색범위. 1=법령명, 2=본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    sort: str = Query("lasc", description="정렬옵션. 예: lasc, ldes, dasc, ddes"),
+    tax_only: bool = Query(True, description="True이면 조세법령으로 보이는 결과만 필터링")
+):
+    """
+    조세법령 검색 전용 endpoint.
+    내부적으로 국가법령정보 lawSearch.do?target=law 를 호출한 뒤,
+    세법 관련 결과를 우선 정리합니다.
+    """
+    resolved_query = resolve_tax_law_name(query)
+
+    laws = search_law_items(
+        query=resolved_query,
+        search=search,
+        display=display,
+        page=page,
+        sort=sort,
+        target="law",
+    )
+
+    filtered_laws = [law for law in laws if is_tax_law_record(law)] if tax_only else laws
+    best_law = find_first_law(filtered_laws, resolved_query)
+
+    return {
+        "query": query,
+        "resolved_query": resolved_query,
+        "search": search,
+        "page": page,
+        "display": display,
+        "tax_only": tax_only,
+        "count": len(filtered_laws),
+        "best_law": best_law,
+        "laws": filtered_laws,
+        "note": (
+            "Tax law search uses the general Korea Law Open API target=law, "
+            "then applies server-side tax law alias resolution and filtering."
+        )
+    }
+
+
+@app.get("/tax/laws/article")
+def get_tax_law_article(
+    law_name: str = Query(..., description="세법명 또는 약칭. 예: 법인세법, 조특법, 상증세법"),
+    article_no: str = Query(..., description="조문번호. 예: 18, 18-2, 제18조의2"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    """
+    조세법령 조문 조회 전용 endpoint.
+    세법 약칭을 먼저 정식 법령명으로 보정한 뒤 /law/article과 같은 방식으로 조회합니다.
+    """
+    oc = require_law_oc()
+    response_type_upper = response_type.upper()
+
+    if response_type_upper not in ["JSON", "XML", "HTML"]:
+        raise HTTPException(status_code=400, detail="response_type은 JSON, XML, HTML 중 하나여야 합니다.")
+
+    resolved_law_name = resolve_tax_law_name(law_name)
+
+    laws = search_law_items(
+        query=resolved_law_name,
+        search=1,
+        display=10,
+        page=1,
+        sort="lasc",
+        target="law",
+    )
+
+    selected_law = find_first_law(laws, resolved_law_name)
+
+    if not selected_law:
+        raise HTTPException(status_code=404, detail=f"{law_name}에 해당하는 조세법령을 찾지 못했습니다.")
+
+    law_id = selected_law.get("law_id")
+    mst = selected_law.get("mst")
+
+    if not law_id and not mst:
+        raise HTTPException(status_code=502, detail="법령 검색 결과에 law_id 또는 mst가 포함되어 있지 않습니다.")
+
+    jo = format_jo(article_no)
+
+    params = {
+        "OC": oc,
+        "target": "law",
+        "type": response_type_upper,
+        "JO": jo,
+    }
+
+    if law_id:
+        params["ID"] = law_id
+    else:
+        params["MST"] = mst
+
+    res = call_law_api(LAW_SERVICE_URL, params=params)
+    data = parse_law_response(res, response_type_upper)
+
+    return {
+        "input_law_name": law_name,
+        "resolved_law_name": resolved_law_name,
+        "law_name": selected_law.get("law_name"),
+        "law_short_name": selected_law.get("law_short_name"),
+        "law_id": law_id,
+        "mst": mst,
+        "law_type": selected_law.get("law_type"),
+        "ministry": selected_law.get("ministry"),
+        "promulgation_date": selected_law.get("promulgation_date"),
+        "enforcement_date": selected_law.get("enforcement_date"),
+        "article_no": article_no,
+        "jo": jo,
+        "response_type": response_type_upper,
+        "data": data,
+        "note": (
+            "This endpoint resolves common Korean tax law aliases before article lookup. "
+            "For related 시행령/시행규칙 provisions, use /tax/laws/package to identify related law IDs first."
+        )
+    }
+
+
+@app.get("/tax/laws/package")
+def get_tax_law_package(
+    law_name: str = Query(..., description="세법명 또는 약칭. 예: 법인세법, 조특법, 상증세법")
+):
+    """
+    특정 세법의 본법, 시행령, 시행규칙 검색 결과를 함께 반환합니다.
+    조문번호는 법/시행령/시행규칙 간에 일치하지 않을 수 있으므로 여기서는 법령 메타데이터만 반환합니다.
+    """
+    resolved_law_name = resolve_tax_law_name(law_name)
+    base_name = resolved_law_name.replace(" 시행령", "").replace(" 시행규칙", "")
+
+    candidates = [
+        base_name,
+        f"{base_name} 시행령",
+        f"{base_name} 시행규칙",
+    ]
+
+    results = []
+    for candidate in candidates:
+        laws = search_law_items(
+            query=candidate,
+            search=1,
+            display=10,
+            page=1,
+            sort="lasc",
+            target="law",
+        )
+        selected = find_first_law(laws, candidate)
+
+        results.append({
+            "query": candidate,
+            "matched_law": selected,
+            "candidate_count": len(laws),
+            "candidates": laws[:5],
+        })
+
+    return {
+        "input_law_name": law_name,
+        "resolved_law_name": resolved_law_name,
+        "base_law_name": base_name,
+        "package": results,
+        "note": (
+            "This endpoint identifies the main tax law, enforcement decree, and enforcement rule. "
+            "Do not assume the same article number applies across law/decree/rule."
+        )
+    }
+
+
+@app.get("/tax/laws/effective-article")
+def get_tax_law_effective_article(
+    law_name: str = Query(..., description="세법명 또는 약칭. 예: 법인세법, 소득세법, 조특법"),
+    article_no: str = Query(..., description="조문번호. 예: 18, 18-2, 제18조의2"),
+    effective_date: str = Query(..., description="시행일 또는 검토 기준일 YYYYMMDD. 예: 20220101"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    """
+    특정 시행일/기준일의 조세법령 조문 조회.
+    먼저 target=eflaw 목록에서 해당 시행일 법령을 찾고, lawService.do에 efYd와 JO를 함께 전달합니다.
+    """
+    resolved_law_name = resolve_tax_law_name(law_name)
+
+    laws = search_law_items(
+        query=resolved_law_name,
+        search=1,
+        display=10,
+        page=1,
+        sort="lasc",
+        target=TAX_LAW_TARGETS["current_law_by_enforcement_date"],
+        extra_params={"efYd": effective_date},
+    )
+
+    selected_law = find_first_law(laws, resolved_law_name)
+    if not selected_law:
+        # eflaw에서 못 찾으면 일반 law 검색으로 fallback
+        laws = search_law_items(query=resolved_law_name, search=1, display=10, page=1, sort="lasc", target="law")
+        selected_law = find_first_law(laws, resolved_law_name)
+
+    if not selected_law:
+        raise HTTPException(status_code=404, detail=f"{law_name}에 해당하는 법령을 찾지 못했습니다.")
+
+    law_id = selected_law.get("law_id")
+    mst = selected_law.get("mst")
+    jo = format_jo(article_no)
+
+    extra_params = {
+        "JO": jo,
+        "efYd": effective_date,
+    }
+    if law_id:
+        extra_params["ID"] = law_id
+    elif mst:
+        extra_params["MST"] = mst
+    else:
+        raise HTTPException(status_code=502, detail="법령 검색 결과에 law_id 또는 mst가 포함되어 있지 않습니다.")
+
+    detail = call_law_service_target(
+        target="law",
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
+    return {
+        "input_law_name": law_name,
+        "resolved_law_name": resolved_law_name,
+        "effective_date": effective_date,
+        "article_no": article_no,
+        "jo": jo,
+        "selected_law": selected_law,
+        "detail": detail,
+        "note": (
+            "시행일 기준 조회는 API의 efYd 지원 여부와 법령별 연혁 데이터 상태에 따라 결과가 달라질 수 있습니다. "
+            "세무 판단 시 거래일, 과세기간, 시행일, 부칙 적용 여부를 함께 확인하세요."
+        ),
+    }
+
+
+@app.get("/tax/laws/history")
+def search_tax_law_history(
+    law_name: str = Query(..., description="세법명 또는 약칭. 예: 법인세법, 소득세법, 조특법"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    sort: str = Query("ddes", description="정렬옵션"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML"),
+    target: Optional[str] = Query(None, description="필요 시 API target 직접 지정. 기본값은 lsHst")
+):
+    """
+    세법 연혁 목록 조회용 endpoint.
+    target명은 서비스 운영 중 법제처 응답에 맞춰 TAX_LAW_TARGETS['law_history']에서 조정할 수 있습니다.
+    """
+    resolved_law_name = resolve_tax_law_name(law_name)
+    target_value = target or TAX_LAW_TARGETS["law_history"]
+
+    return call_law_search_target(
+        target=target_value,
+        query=resolved_law_name,
+        search=None,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+    )
+
+
+@app.get("/tax/laws/article-history")
+def search_tax_law_article_history(
+    law_name: str = Query(..., description="세법명 또는 약칭. 예: 법인세법, 조특법"),
+    article_no: Optional[str] = Query(None, description="조문번호. 예: 18, 18-2"),
+    start_date: Optional[str] = Query(None, description="검색 시작일 YYYYMMDD"),
+    end_date: Optional[str] = Query(None, description="검색 종료일 YYYYMMDD"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    sort: str = Query("ddes", description="정렬옵션"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML"),
+    target: Optional[str] = Query(None, description="필요 시 API target 직접 지정. 기본값은 lsJoHst")
+):
+    """
+    조문 개정이력 조회용 endpoint.
+    법제처 조문 개정이력 계열 API의 target/필드명이 환경별로 다를 수 있어 target 직접 지정 옵션을 둡니다.
+    """
+    resolved_law_name = resolve_tax_law_name(law_name)
+    target_value = target or TAX_LAW_TARGETS["law_article_history_by_article"]
+
+    extra_params = {}
+    if article_no:
+        extra_params["JO"] = format_jo(article_no)
+    if start_date and end_date:
+        extra_params["efYd"] = f"{start_date}~{end_date}"
+    elif start_date:
+        extra_params["efYd"] = start_date
+
+    return call_law_search_target(
+        target=target_value,
+        query=resolved_law_name,
+        search=None,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
+
+@app.get("/tax/laws/compare")
+def get_tax_law_old_and_new_compare(
+    law_name: str = Query(..., description="세법명 또는 약칭. 예: 법인세법, 조특법"),
+    law_id: Optional[str] = Query(None, description="법령ID. 없으면 법령명으로 검색 후 best law 사용"),
+    mst: Optional[str] = Query(None, description="법령 마스터 번호"),
+    promulgation_date: Optional[str] = Query(None, description="공포일자 LD YYYYMMDD"),
+    promulgation_no: Optional[str] = Query(None, description="공포번호 LN"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML"),
+    target: Optional[str] = Query(None, description="필요 시 API target 직접 지정. 기본값은 oldAndNew")
+):
+    """
+    세법 신구법 비교 본문 조회.
+    law_id 또는 mst가 없으면 현행 법령 검색으로 식별 후 oldAndNew service를 호출합니다.
+    """
+    resolved_law_name = resolve_tax_law_name(law_name)
+    selected_law = None
+
+    if not law_id and not mst:
+        laws = search_law_items(query=resolved_law_name, search=1, display=10, page=1, sort="lasc", target="law")
+        selected_law = find_first_law(laws, resolved_law_name)
+        if selected_law:
+            law_id = selected_law.get("law_id")
+            mst = selected_law.get("mst")
+
+    extra_params = {}
+    if law_id:
+        extra_params["ID"] = law_id
+    if mst:
+        extra_params["MST"] = mst
+    if resolved_law_name:
+        extra_params["LM"] = resolved_law_name
+    if promulgation_date:
+        extra_params["LD"] = promulgation_date
+    if promulgation_no:
+        extra_params["LN"] = promulgation_no
+
+    return {
+        "input_law_name": law_name,
+        "resolved_law_name": resolved_law_name,
+        "selected_law": selected_law,
+        "compare": call_law_service_target(
+            target=target or TAX_LAW_TARGETS["old_and_new"],
+            response_type=response_type,
+            extra_params=extra_params,
+        ),
+    }
+
+
+@app.get("/tax/laws/three-way-compare")
+def get_tax_law_three_way_compare(
+    law_name: str = Query(..., description="세법명 또는 약칭. 예: 법인세법, 조특법"),
+    law_id: Optional[str] = Query(None, description="법령ID. 없으면 법령명으로 검색 후 best law 사용"),
+    mst: Optional[str] = Query(None, description="법령 마스터 번호"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML"),
+    target: Optional[str] = Query(None, description="필요 시 API target 직접 지정. 기본값은 threeWay")
+):
+    """
+    세법 3단 비교 본문 조회.
+    target명은 서비스 운영 중 법제처 응답에 맞춰 TAX_LAW_TARGETS['three_way_compare']에서 조정할 수 있습니다.
+    """
+    resolved_law_name = resolve_tax_law_name(law_name)
+    selected_law = None
+
+    if not law_id and not mst:
+        laws = search_law_items(query=resolved_law_name, search=1, display=10, page=1, sort="lasc", target="law")
+        selected_law = find_first_law(laws, resolved_law_name)
+        if selected_law:
+            law_id = selected_law.get("law_id")
+            mst = selected_law.get("mst")
+
+    extra_params = {}
+    if law_id:
+        extra_params["ID"] = law_id
+    if mst:
+        extra_params["MST"] = mst
+    if resolved_law_name:
+        extra_params["LM"] = resolved_law_name
+
+    return {
+        "input_law_name": law_name,
+        "resolved_law_name": resolved_law_name,
+        "selected_law": selected_law,
+        "three_way_compare": call_law_service_target(
+            target=target or TAX_LAW_TARGETS["three_way_compare"],
+            response_type=response_type,
+            extra_params=extra_params,
+        ),
+    }
+
+
+# =========================================================
+# TAX CASE / APPEAL / INTERPRETATION endpoints
+# =========================================================
+
+@app.get("/tax/cases/search")
+def search_tax_cases(
+    query: str = Query("", description="검색어. 예: 명의신탁, 부가가치세, 실질과세"),
+    search: int = Query(1, ge=1, le=2, description="검색범위. 1=판례명, 2=본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    org: Optional[str] = Query(None, description="법원종류. 대법원=400201, 하위법원=400202"),
+    curt: Optional[str] = Query(None, description="법원명. 예: 대법원, 서울고등법원"),
+    jo: Optional[str] = Query(None, alias="JO", description="참조법령명. 예: 법인세법, 부가가치세법"),
+    date: Optional[str] = Query(None, description="선고일자 YYYYMMDD"),
+    prncYd: Optional[str] = Query(None, description="선고일자 범위. 예: 20240101~20241231"),
+    nb: Optional[str] = Query(None, description="사건번호"),
+    datSrcNm: str = Query("국세법령정보시스템", description="데이터출처명. 예: 국세법령정보시스템, 대법원"),
+    sort: str = Query("ddes", description="정렬옵션. ddes=선고일자 내림차순"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    extra_params = {
+        "org": org,
+        "curt": curt,
+        "JO": jo,
+        "date": date,
+        "prncYd": prncYd,
+        "nb": nb,
+        "datSrcNm": datSrcNm,
+    }
+
+    return call_law_search_target(
+        target=TAX_LAW_TARGETS["case"],
+        query=query,
+        search=search,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
+
+@app.get("/tax/cases/detail")
+def get_tax_case_detail(
+    case_id: Optional[str] = Query(None, description="판례일련번호"),
+    id: Optional[str] = Query(None, description="판례일련번호 호환 파라미터"),
+    lm: Optional[str] = Query(None, description="판례명"),
+    query: Optional[str] = Query(None, description="case_id를 모를 때 검색어로 먼저 검색"),
+    response_type: str = Query("HTML", description="응답 형식: JSON, XML, HTML. 국세청 판례 본문은 HTML만 가능한 경우가 있습니다.")
+):
+    selected = None
+    selected_id = normalize_text(case_id or id)
+
+    if not selected_id and query:
+        search_result = call_law_search_target(
+            target=TAX_LAW_TARGETS["case"],
+            query=query,
+            search=1,
+            display=5,
+            page=1,
+            sort="ddes",
+            response_type="JSON",
+            extra_params={"datSrcNm": "국세법령정보시스템"},
+        )
+        selected = find_first_generic_item(search_result.get("normalized"), query)
+        if selected:
+            selected_id = normalize_text(selected.get("id"))
+
+    if not selected_id and not lm:
+        raise HTTPException(status_code=400, detail="case_id/id, lm 또는 query 중 하나가 필요합니다.")
+
+    return {
+        "selected_item": selected,
+        "detail": call_law_service_target(
+            target=TAX_LAW_TARGETS["case"],
+            item_id=selected_id,
+            lm=lm,
+            response_type=response_type,
+        ),
+        "note": "국세청 판례 본문 조회는 API 정책상 HTML만 가능한 경우가 있으므로 JSON 조회 실패 시 response_type=HTML로 재시도하세요."
+    }
+
+
+@app.get("/tax/appeals/search")
+def search_tax_appeals(
+    query: str = Query("", description="검색어. 예: 명의신탁, 가공세금계산서, 실질과세"),
+    search: int = Query(1, ge=1, le=2, description="검색범위. 1=재결례명, 2=본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    cls: Optional[str] = Query(None, description="재결례유형 또는 재결구분코드"),
+    date: Optional[str] = Query(None, description="의결일자 YYYYMMDD"),
+    dpaYd: Optional[str] = Query(None, description="처분일자 범위. 예: 20240101~20241231"),
+    rslYd: Optional[str] = Query(None, description="의결일자 범위. 예: 20240101~20241231"),
+    sort: str = Query("ddes", description="정렬옵션. ddes=의결일자 내림차순"),
+    fields: Optional[str] = Query(None, description="응답항목 옵션"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    extra_params = {
+        "cls": cls,
+        "date": date,
+        "dpaYd": dpaYd,
+        "rslYd": rslYd,
+        "fields": fields,
+    }
+
+    return call_law_search_target(
+        target=TAX_LAW_TARGETS["tax_appeal"],
+        query=query,
+        search=search,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
+
+@app.get("/tax/appeals/detail")
+def get_tax_appeal_detail(
+    appeal_id: Optional[str] = Query(None, description="특별행정심판재결례일련번호"),
+    id: Optional[str] = Query(None, description="특별행정심판재결례일련번호 호환 파라미터"),
+    lm: Optional[str] = Query(None, description="특별행정심판재결례명"),
+    query: Optional[str] = Query(None, description="appeal_id를 모를 때 검색어로 먼저 검색"),
+    fields: Optional[str] = Query(None, description="응답항목 옵션"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    selected = None
+    selected_id = normalize_text(appeal_id or id)
+
+    if not selected_id and query:
+        search_result = call_law_search_target(
+            target=TAX_LAW_TARGETS["tax_appeal"],
+            query=query,
+            search=1,
+            display=5,
+            page=1,
+            sort="ddes",
+            response_type="JSON",
+        )
+        selected = find_first_generic_item(search_result.get("normalized"), query)
+        if selected:
+            selected_id = normalize_text(selected.get("id"))
+
+    if not selected_id and not lm:
+        raise HTTPException(status_code=400, detail="appeal_id/id, lm 또는 query 중 하나가 필요합니다.")
+
+    return {
+        "selected_item": selected,
+        "detail": call_law_service_target(
+            target=TAX_LAW_TARGETS["tax_appeal"],
+            item_id=selected_id,
+            lm=lm,
+            response_type=response_type,
+            extra_params={"fields": fields} if fields else None,
+        ),
+    }
+
+
+@app.get("/tax/nts-interpretations/search")
+def search_nts_interpretations(
+    query: str = Query("", description="검색어. 예: 부당행위계산, 업무무관, 가업승계"),
+    search: int = Query(1, ge=1, le=2, description="검색범위. 1=법령해석명, 2=본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    inq: Optional[int] = Query(None, description="질의기관코드"),
+    rpl: Optional[int] = Query(None, description="해석기관코드"),
+    itmno: Optional[int] = Query(None, description="안건번호. 입력 시 query는 무시될 수 있음"),
+    explYd: Optional[str] = Query(None, description="해석일자 범위. 예: 20240101~20241231"),
+    sort: str = Query("ddes", description="정렬옵션. ddes=해석일자 내림차순"),
+    fields: Optional[str] = Query(None, description="응답항목 옵션"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    extra_params = {
+        "inq": inq,
+        "rpl": rpl,
+        "itmno": itmno,
+        "explYd": explYd,
+        "fields": fields,
+    }
+
+    return {
+        **call_law_search_target(
+            target=TAX_LAW_TARGETS["nts_interpretation"],
+            query=query,
+            search=search,
+            display=display,
+            page=page,
+            sort=sort,
+            response_type=response_type,
+            extra_params=extra_params,
+        ),
+        "note": "국세청 법령해석은 국가법령정보 API 가이드상 목록 조회 중심으로 제공됩니다. 본문은 결과의 상세링크 또는 국세법령정보시스템 원문 확인이 필요할 수 있습니다."
+    }
+
+
+@app.get("/tax/admin-rules/search")
+def search_tax_admin_rules(
+    query: str = Query("", description="검색어. 예: 국세청, 법인세, 사무처리규정"),
+    search: int = Query(1, ge=1, le=2, description="검색범위. 1=행정규칙명, 2=본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    nw: int = Query(1, description="1=현행, 2=연혁"),
+    org: Optional[str] = Query(None, description="소관부처 코드. 국세청/관세청 등 코드 확인 후 입력"),
+    knd: Optional[str] = Query(None, description="1=훈령, 2=예규, 3=고시, 4=공고, 5=지침, 6=기타"),
+    date: Optional[str] = Query(None, description="발령일자 YYYYMMDD"),
+    prmlYd: Optional[str] = Query(None, description="발령일자 범위. 예: 20240101~20241231"),
+    nb: Optional[str] = Query(None, description="발령번호"),
+    sort: str = Query("ddes", description="정렬옵션. ddes=발령일자 내림차순"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    extra_params = {
+        "nw": nw,
+        "org": org,
+        "knd": knd,
+        "date": date,
+        "prmlYd": prmlYd,
+        "nb": nb,
+    }
+
+    return call_law_search_target(
+        target=TAX_LAW_TARGETS["admin_rule"],
+        query=query,
+        search=search,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
+
+@app.get("/tax/admin-rules/detail")
+def get_tax_admin_rule_detail(
+    rule_id: Optional[str] = Query(None, description="행정규칙 일련번호"),
+    lid: Optional[str] = Query(None, description="행정규칙 ID"),
+    lm: Optional[str] = Query(None, description="행정규칙명"),
+    query: Optional[str] = Query(None, description="rule_id/lid를 모를 때 검색어로 먼저 검색"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    selected = None
+    selected_id = normalize_text(rule_id)
+
+    if not selected_id and not lid and query:
+        search_result = call_law_search_target(
+            target=TAX_LAW_TARGETS["admin_rule"],
+            query=query,
+            search=1,
+            display=5,
+            page=1,
+            sort="ddes",
+            response_type="JSON",
+            extra_params={"nw": 1},
+        )
+        selected = find_first_generic_item(search_result.get("normalized"), query)
+        if selected:
+            selected_id = normalize_text(selected.get("id"))
+
+    extra_params = {}
+    if lid:
+        extra_params["LID"] = lid
+
+    if not selected_id and not lm and not extra_params:
+        raise HTTPException(status_code=400, detail="rule_id, lid, lm 또는 query 중 하나가 필요합니다.")
+
+    return {
+        "selected_item": selected,
+        "detail": call_law_service_target(
+            target=TAX_LAW_TARGETS["admin_rule"],
+            item_id=selected_id,
+            lm=lm,
+            response_type=response_type,
+            extra_params=extra_params or None,
+        ),
+    }
+
+
+@app.get("/tax/attachments/search")
+def search_tax_attachments(
+    query: str = Query("*", description="검색어. 예: 법인세법, 세액공제, 별지"),
+    search: int = Query(1, ge=1, le=3, description="1=별표서식명, 2=해당법령검색, 3=별표본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    org: Optional[str] = Query(None, description="소관부처 코드"),
+    mulOrg: Optional[str] = Query(None, description="소관부처 복수검색 조건 OR/AND"),
+    knd: Optional[str] = Query(None, description="1=별표, 2=서식, 3=별지, 4=별도, 5=부록"),
+    sort: str = Query("lasc", description="정렬옵션"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    extra_params = {
+        "org": org,
+        "mulOrg": mulOrg,
+        "knd": knd,
+    }
+
+    return call_law_search_target(
+        target=TAX_LAW_TARGETS["law_attachment"],
+        query=query,
+        search=search,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
+
+# =========================================================
+# GENERAL LEGAL INTERPRETATION / CONSTITUTIONAL CASE endpoints
+# =========================================================
+
+@app.get("/law/interpretations/search")
+def search_legal_interpretations(
+    query: str = Query("", description="검색어. 예: 과세, 부담금, 인허가"),
+    search: int = Query(1, ge=1, le=2, description="검색범위. 1=법령해석례명, 2=본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    inq: Optional[int] = Query(None, description="질의기관코드"),
+    rpl: Optional[int] = Query(None, description="회신기관코드"),
+    itmno: Optional[int] = Query(None, description="안건번호"),
+    regYd: Optional[str] = Query(None, description="등록일자 범위. 예: 20240101~20241231"),
+    explYd: Optional[str] = Query(None, description="해석일자 범위. 예: 20240101~20241231"),
+    sort: str = Query("ddes", description="정렬옵션. ddes=해석일자 내림차순"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    extra_params = {
+        "inq": inq,
+        "rpl": rpl,
+        "itmno": itmno,
+        "regYd": regYd,
+        "explYd": explYd,
+    }
+
+    return call_law_search_target(
+        target=TAX_LAW_TARGETS["legal_interpretation"],
+        query=query,
+        search=search,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
+
+@app.get("/law/interpretations/detail")
+def get_legal_interpretation_detail(
+    interpretation_id: Optional[str] = Query(None, description="법령해석례일련번호"),
+    id: Optional[str] = Query(None, description="법령해석례일련번호 호환 파라미터"),
+    lm: Optional[str] = Query(None, description="법령해석례명"),
+    query: Optional[str] = Query(None, description="ID를 모를 때 검색어로 먼저 검색"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML"),
+    target: Optional[str] = Query(None, description="필요 시 target 직접 지정. 기본값은 expc")
+):
+    selected = None
+    selected_id = normalize_text(interpretation_id or id)
+    target_value = target or TAX_LAW_TARGETS["legal_interpretation"]
+
+    if not selected_id and query:
+        search_result = call_law_search_target(
+            target=target_value,
+            query=query,
+            search=1,
+            display=5,
+            page=1,
+            sort="ddes",
+            response_type="JSON",
+        )
+        selected = find_first_generic_item(search_result.get("normalized"), query)
+        if selected:
+            selected_id = normalize_text(selected.get("id"))
+
+    if not selected_id and not lm:
+        raise HTTPException(status_code=400, detail="interpretation_id/id, lm 또는 query 중 하나가 필요합니다.")
+
+    return {
+        "selected_item": selected,
+        "detail": call_law_service_target(
+            target=target_value,
+            item_id=selected_id,
+            lm=lm,
+            response_type=response_type,
+        ),
+    }
+
+
+@app.get("/law/constitutional-cases/search")
+def search_constitutional_cases(
+    query: str = Query("", description="검색어. 예: 조세평등, 소급과세, 재산권"),
+    search: int = Query(1, ge=1, le=2, description="검색범위. 1=헌재결정례명, 2=본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    date: Optional[str] = Query(None, description="종국일자 YYYYMMDD"),
+    edYd: Optional[str] = Query(None, description="종국일자 범위. 예: 20240101~20241231"),
+    nb: Optional[str] = Query(None, description="사건번호"),
+    sort: str = Query("ddes", description="정렬옵션. ddes=선고/종국일자 내림차순"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    extra_params = {
+        "date": date,
+        "edYd": edYd,
+        "nb": nb,
+    }
+
+    return call_law_search_target(
+        target=TAX_LAW_TARGETS["constitutional_case"],
+        query=query,
+        search=search,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
+
+@app.get("/law/constitutional-cases/detail")
+def get_constitutional_case_detail(
+    case_id: Optional[str] = Query(None, description="헌재결정례일련번호"),
+    id: Optional[str] = Query(None, description="헌재결정례일련번호 호환 파라미터"),
+    lm: Optional[str] = Query(None, description="헌재결정례명"),
+    query: Optional[str] = Query(None, description="ID를 모를 때 검색어로 먼저 검색"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML"),
+    target: Optional[str] = Query(None, description="필요 시 target 직접 지정. 기본값은 detc")
+):
+    selected = None
+    selected_id = normalize_text(case_id or id)
+    target_value = target or TAX_LAW_TARGETS["constitutional_case"]
+
+    if not selected_id and query:
+        search_result = call_law_search_target(
+            target=target_value,
+            query=query,
+            search=1,
+            display=5,
+            page=1,
+            sort="ddes",
+            response_type="JSON",
+        )
+        selected = find_first_generic_item(search_result.get("normalized"), query)
+        if selected:
+            selected_id = normalize_text(selected.get("id"))
+
+    if not selected_id and not lm:
+        raise HTTPException(status_code=400, detail="case_id/id, lm 또는 query 중 하나가 필요합니다.")
+
+    return {
+        "selected_item": selected,
+        "detail": call_law_service_target(
+            target=target_value,
+            item_id=selected_id,
+            lm=lm,
+            response_type=response_type,
+        ),
+    }
+
+
+# =========================================================
+# LAW TERM / RELATED LAW endpoints
+# =========================================================
+
+@app.get("/law/terms/search")
+def search_law_terms(
+    query: str = Query(..., description="법령용어 검색어. 예: 특수관계인, 거주자, 실질귀속"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    sort: str = Query("lasc", description="정렬옵션. lasc/ldes/rasc/rdes"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML"),
+    target: Optional[str] = Query(None, description="필요 시 target 직접 지정. 기본값은 lstrm")
+):
+    return call_law_search_target(
+        target=target or TAX_LAW_TARGETS["law_term"],
+        query=query,
+        search=None,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+    )
+
+
+@app.get("/law/terms/detail")
+def get_law_term_detail(
+    term_id: Optional[str] = Query(None, description="법령용어 ID"),
+    id: Optional[str] = Query(None, description="법령용어 ID 호환 파라미터"),
+    query: Optional[str] = Query(None, description="ID를 모를 때 용어명으로 먼저 검색"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML"),
+    target: Optional[str] = Query(None, description="필요 시 target 직접 지정. 기본값은 lstrm")
+):
+    selected = None
+    selected_id = normalize_text(term_id or id)
+    target_value = target or TAX_LAW_TARGETS["law_term"]
+
+    if not selected_id and query:
+        search_result = call_law_search_target(
+            target=target_value,
+            query=query,
+            search=None,
+            display=5,
+            page=1,
+            sort="lasc",
+            response_type="JSON",
+        )
+        selected = find_first_generic_item(search_result.get("normalized"), query)
+        if selected:
+            selected_id = normalize_text(selected.get("id"))
+
+    if not selected_id:
+        raise HTTPException(status_code=400, detail="term_id/id 또는 query 중 하나가 필요합니다.")
+
+    return {
+        "selected_item": selected,
+        "detail": call_law_service_target(
+            target=target_value,
+            item_id=selected_id,
+            response_type=response_type,
+        ),
+    }
+
+
+@app.get("/tax/terms/search")
+def search_tax_terms(
+    query: str = Query(..., description="조세 관련 법령용어 검색어. 예: 특수관계인, 거주자, 실질귀속"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    sort: str = Query("lasc", description="정렬옵션. lasc/ldes/rasc/rdes"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    return call_law_search_target(
+        target=TAX_LAW_TARGETS["law_term"],
+        query=query,
+        search=None,
+        display=display,
+        page=page,
+        sort=sort,
+        response_type=response_type,
+    )
+
+
+@app.get("/tax/terms/detail")
+def get_tax_term_detail(
+    term_id: Optional[str] = Query(None, description="법령용어 ID"),
+    id: Optional[str] = Query(None, description="법령용어 ID 호환 파라미터"),
+    query: Optional[str] = Query(None, description="ID를 모를 때 용어명으로 먼저 검색"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    selected = None
+    selected_id = normalize_text(term_id or id)
+
+    if not selected_id and query:
+        search_result = call_law_search_target(
+            target=TAX_LAW_TARGETS["law_term"],
+            query=query,
+            search=None,
+            display=5,
+            page=1,
+            sort="lasc",
+            response_type="JSON",
+        )
+        selected = find_first_generic_item(search_result.get("normalized"), query)
+        if selected:
+            selected_id = normalize_text(selected.get("id"))
+
+    if not selected_id:
+        raise HTTPException(status_code=400, detail="term_id/id 또는 query 중 하나가 필요합니다.")
+
+    return {
+        "selected_item": selected,
+        "detail": call_law_service_target(
+            target=TAX_LAW_TARGETS["law_term"],
+            item_id=selected_id,
+            response_type=response_type,
+        ),
+    }
+
+
+@app.get("/law/related-laws/search")
+def search_related_laws(
+    law_name: Optional[str] = Query(None, description="법령명. 예: 법인세법"),
+    law_id: Optional[str] = Query(None, description="법령ID"),
+    mst: Optional[str] = Query(None, description="법령 마스터 번호"),
+    query: Optional[str] = Query(None, description="검색어. law_name 대신 사용 가능"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML"),
+    target: Optional[str] = Query(None, description="필요 시 target 직접 지정. 기본값은 relatedLs")
+):
+    """
+    법령 간 관련법령 조회.
+    법령정보 지식베이스의 관련법령 API target명은 운영 중 응답에 맞춰 TAX_LAW_TARGETS['related_law']에서 조정 가능합니다.
+    """
+    resolved_name = resolve_tax_law_name(law_name) if law_name else (query or "")
+
+    extra_params = {}
+    if law_id:
+        extra_params["ID"] = law_id
+    if mst:
+        extra_params["MST"] = mst
+    if resolved_name:
+        extra_params["query"] = resolved_name
+
+    return call_law_search_target(
+        target=target or TAX_LAW_TARGETS["related_law"],
+        query=resolved_name,
+        search=None,
+        display=display,
+        page=page,
+        sort=None,
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
+
+@app.get("/tax/related-laws/search")
+def search_tax_related_laws(
+    law_name: str = Query(..., description="세법명 또는 약칭. 예: 법인세법, 조특법, 상증세법"),
+    law_id: Optional[str] = Query(None, description="법령ID"),
+    mst: Optional[str] = Query(None, description="법령 마스터 번호"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    resolved_name = resolve_tax_law_name(law_name)
+    extra_params = {}
+    if law_id:
+        extra_params["ID"] = law_id
+    if mst:
+        extra_params["MST"] = mst
+    if resolved_name:
+        extra_params["query"] = resolved_name
+
+    return call_law_search_target(
+        target=TAX_LAW_TARGETS["related_law"],
+        query=resolved_name,
+        search=None,
+        display=display,
+        page=page,
+        sort=None,
+        response_type=response_type,
+        extra_params=extra_params,
+    )
+
 
 
 # =========================================================
