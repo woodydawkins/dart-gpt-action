@@ -13,11 +13,12 @@ load_dotenv()
 
 app = FastAPI(
     title="DART·KRX Disclosure & Market Research API",
-    version="1.5.0",
+    version="1.6.0",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
         "and Korea Law Open API. It supports DART-registered companies, including listed and non-listed disclosure companies, "
-        "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, and legal search/article lookup."
+        "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, legal search/article lookup, "
+        "and treaty search/detail lookup including tax treaties."
     )
 )
 
@@ -71,7 +72,7 @@ def root():
         "scope": {
             "dart": "DART-registered companies, including listed and non-listed disclosure companies.",
             "krx": "KRX market data for KOSPI, KOSDAQ, KONEX, and ETF if API URLs and key are configured.",
-            "law": "Korea Law Open API search and article lookup if LAW_OC is configured."
+            "law": "Korea Law Open API search, article lookup, and treaty lookup if LAW_OC is configured."
         },
         "endpoints": {
             "dart": [
@@ -87,7 +88,9 @@ def root():
             "law": [
                 "/law/search",
                 "/law/detail",
-                "/law/article"
+                "/law/article",
+                "/law/treaties/search",
+                "/law/treaties/detail"
             ]
         }
     }
@@ -360,6 +363,166 @@ def parse_law_response(res: requests.Response, response_type: str):
     }
 
 
+def pick_first(item: dict[str, Any], *keys: str):
+    """
+    국가법령정보 API의 한글/영문/버전별 필드명을 유연하게 처리하기 위한 helper.
+    """
+    for key in keys:
+        value = item.get(key)
+        if value is not None and str(value).strip() != "":
+            return value
+    return None
+
+
+def find_first_list(value: Any, preferred_keys: list[str]) -> list[Any]:
+    """
+    국가법령정보 API 응답 구조가 서비스별로 조금씩 다르기 때문에,
+    지정한 후보 key 또는 중첩 dict에서 첫 번째 list를 찾아 반환합니다.
+    """
+    if isinstance(value, list):
+        return value
+
+    if not isinstance(value, dict):
+        return []
+
+    for key in preferred_keys:
+        candidate = value.get(key)
+        if isinstance(candidate, list):
+            return candidate
+        if isinstance(candidate, dict):
+            return [candidate]
+
+    for candidate in value.values():
+        if isinstance(candidate, list):
+            return candidate
+        if isinstance(candidate, dict):
+            nested = find_first_list(candidate, preferred_keys)
+            if nested:
+                return nested
+
+    return []
+
+
+def normalize_treaty_search_response(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    국가법령정보 조약 목록(lawSearch.do?target=trty) JSON 응답을 GPT가 다루기 쉬운 리스트로 정규화합니다.
+    API 응답 필드명이 한글/영문/서비스 버전에 따라 달라질 수 있어 가능한 필드명을 폭넓게 수용합니다.
+    """
+    if not isinstance(data, dict):
+        return []
+
+    root = (
+        data.get("TrtySearch")
+        or data.get("trtySearch")
+        or data.get("TreatySearch")
+        or data.get("treatySearch")
+        or data
+    )
+
+    treaty_items = find_first_list(
+        root,
+        preferred_keys=[
+            "trty",
+            "treaty",
+            "조약",
+            "Trty",
+            "Treaty",
+            "items",
+            "item",
+            "list",
+            "data",
+            "result",
+            "results",
+        ],
+    )
+
+    result = []
+    for item in treaty_items:
+        if not isinstance(item, dict):
+            continue
+
+        result.append({
+            "treaty_id": pick_first(
+                item,
+                "조약ID", "조약일련번호", "ID", "id", "trtyId", "treatyId", "trty_id", "treaty_id"
+            ),
+            "mst": pick_first(item, "MST", "mst", "조약일련번호"),
+            "treaty_name_ko": pick_first(
+                item,
+                "조약명한글", "조약명", "한글조약명", "trtyNm", "treatyNameKo", "treaty_name_ko"
+            ),
+            "treaty_name_en": pick_first(
+                item,
+                "조약명영문", "영문조약명", "trtyNmEng", "treatyNameEn", "treaty_name_en"
+            ),
+            "treaty_no": pick_first(item, "조약번호", "trtyNo", "treatyNo", "treaty_no"),
+            "country_name": pick_first(item, "국가명", "상대국", "체약국", "natNm", "countryName", "country_name"),
+            "country_code": pick_first(item, "국가코드", "natCd", "countryCode", "country_code"),
+            "treaty_class": pick_first(item, "조약구분", "조약구분명", "분류", "cls", "className", "treaty_class"),
+            "signature_date": pick_first(item, "서명일자", "서명일", "signDate", "signatureDate", "signature_date"),
+            "promulgation_date": pick_first(item, "공포일자", "공포일", "promulgationDate", "promulgation_date"),
+            "enforcement_date": pick_first(item, "발효일자", "발효일", "시행일자", "effectiveDate", "enforcement_date"),
+            "revision_type": pick_first(item, "제개정구분명", "개정구분", "revisionType", "revision_type"),
+            "detail_link": pick_first(item, "조약상세링크", "상세링크", "detailLink", "detail_link"),
+            "raw": item,
+        })
+
+    return result
+
+
+def find_first_treaty(treaties: list[dict[str, Any]], query: str) -> Optional[dict[str, Any]]:
+    """
+    검색 결과에서 조약명을 기준으로 가장 적절한 조약 선택.
+    1순위: 한글 조약명 완전일치
+    2순위: 영문 조약명 완전일치
+    3순위: 한글/영문 조약명 부분일치
+    4순위: 첫 번째 결과
+    """
+    q = normalize_text(query).replace(" ", "")
+
+    if not treaties:
+        return None
+
+    if not q:
+        return treaties[0]
+
+    for treaty in treaties:
+        name_ko = normalize_text(treaty.get("treaty_name_ko")).replace(" ", "")
+        if name_ko == q:
+            return treaty
+
+    for treaty in treaties:
+        name_en = normalize_text(treaty.get("treaty_name_en")).replace(" ", "").lower()
+        if name_en == q.lower():
+            return treaty
+
+    for treaty in treaties:
+        name_ko = normalize_text(treaty.get("treaty_name_ko")).replace(" ", "")
+        name_en = normalize_text(treaty.get("treaty_name_en")).replace(" ", "").lower()
+        if q in name_ko or q.lower() in name_en:
+            return treaty
+
+    return treaties[0]
+
+
+def treaty_language_to_chr_cls_cd(language: str, chr_cls_cd: Optional[str] = None) -> str:
+    """
+    국가법령정보 조약 본문 언어 코드 변환.
+    - ko: 한글 본문(010202)
+    - en: 영문 본문(010203)
+    chr_cls_cd를 직접 넘기면 해당 값을 우선합니다.
+    """
+    if chr_cls_cd:
+        return chr_cls_cd
+
+    lang = normalize_text(language).lower()
+
+    if lang in ["en", "eng", "english", "영문", "영어"]:
+        return "010203"
+
+    return "010202"
+
+
 # =========================================================
 # LAW endpoints
 # =========================================================
@@ -529,6 +692,138 @@ def get_law_article(
         "response_type": response_type_upper,
         "data": detail_data,
         "note": "과거 시행일 기준 조문 조회는 추후 target=eflaw 방식으로 별도 엔드포인트를 추가하는 것을 권장합니다."
+    }
+
+
+@app.get("/law/treaties/search")
+def search_treaties(
+    query: str = Query("", description="검색어. 예: 미국, 일본, 이중과세, 소득"),
+    search: int = Query(1, ge=1, le=2, description="검색범위. 1=조약명, 2=본문검색"),
+    display: int = Query(10, ge=1, le=100, description="검색 결과 수"),
+    page: int = Query(1, ge=1, description="페이지 번호"),
+    cls: Optional[int] = Query(None, description="조약분류. 1=양자조약, 2=다자조약"),
+    natCd: Optional[int] = Query(None, description="국가법령정보 API 국가코드"),
+    sort: str = Query("lasc", description="정렬옵션. 예: lasc, ldes, dasc, ddes, nasc, ndes, rasc, rdes")
+):
+    """
+    국가법령정보 조약 목록 검색.
+    조세조약, 이중과세방지협정, 제한세율 검토의 1차 검색용으로 사용합니다.
+    내부적으로 lawSearch.do?target=trty를 호출합니다.
+    """
+    oc = require_law_oc()
+
+    params = {
+        "OC": oc,
+        "target": "trty",
+        "type": "JSON",
+        "query": query,
+        "search": search,
+        "display": display,
+        "page": page,
+        "sort": sort,
+    }
+
+    if cls is not None:
+        params["cls"] = cls
+
+    if natCd is not None:
+        params["natCd"] = natCd
+
+    res = call_law_api(LAW_SEARCH_URL, params=params)
+    data = parse_law_response(res, "JSON")
+    treaties = normalize_treaty_search_response(data)
+    best_treaty = find_first_treaty(treaties, query)
+
+    return {
+        "query": query,
+        "search": search,
+        "page": page,
+        "display": display,
+        "count": len(treaties),
+        "best_treaty": best_treaty,
+        "treaties": treaties,
+        "note": (
+            "조약 본문은 /law/treaties/detail에서 treaty_id 또는 query를 사용해 조회하세요. "
+            "조세조약 적용 여부와 제한세율은 조약 본문, 국내 세법, 시행령, 예규 및 사실관계 확인이 함께 필요합니다."
+        ),
+    }
+
+
+@app.get("/law/treaties/detail")
+def get_treaty_detail(
+    treaty_id: Optional[str] = Query(None, description="조약ID 또는 조약일련번호. /law/treaties/search 결과의 treaty_id 사용"),
+    id: Optional[str] = Query(None, description="조약ID. GPT Action schema에서 id라는 이름으로 넘기는 경우를 위한 호환 파라미터"),
+    query: Optional[str] = Query(None, description="treaty_id를 모를 때 사용할 검색어. 예: 미국, 일본, 소득"),
+    language: str = Query("ko", description="본문 언어. ko=한글, en=영문"),
+    chrClsCd: Optional[str] = Query(None, description="국가법령정보 API 조약 본문 언어 코드. 직접 지정 시 language보다 우선"),
+    response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
+):
+    """
+    국가법령정보 조약 본문 조회.
+    treaty_id가 있으면 바로 lawService.do?target=trty를 호출하고,
+    treaty_id가 없고 query가 있으면 조약 목록 검색 후 best_treaty를 선택하여 본문을 조회합니다.
+    """
+    oc = require_law_oc()
+    response_type_upper = response_type.upper()
+
+    if response_type_upper not in ["JSON", "XML", "HTML"]:
+        raise HTTPException(status_code=400, detail="response_type은 JSON, XML, HTML 중 하나여야 합니다.")
+
+    selected_treaty = None
+    selected_treaty_id = normalize_text(treaty_id or id)
+
+    if not selected_treaty_id and query:
+        search_params = {
+            "OC": oc,
+            "target": "trty",
+            "type": "JSON",
+            "query": query,
+            "search": 1,
+            "display": 10,
+            "page": 1,
+            "sort": "lasc",
+        }
+
+        search_res = call_law_api(LAW_SEARCH_URL, params=search_params)
+        search_data = parse_law_response(search_res, "JSON")
+        treaties = normalize_treaty_search_response(search_data)
+        selected_treaty = find_first_treaty(treaties, query)
+
+        if selected_treaty:
+            selected_treaty_id = normalize_text(
+                selected_treaty.get("treaty_id") or selected_treaty.get("mst")
+            )
+
+    if not selected_treaty_id:
+        raise HTTPException(
+            status_code=400,
+            detail="treaty_id 또는 id를 입력하거나, query를 입력해 조약을 검색할 수 있게 하세요."
+        )
+
+    params = {
+        "OC": oc,
+        "target": "trty",
+        "type": response_type_upper,
+        "ID": selected_treaty_id,
+        "chrClsCd": treaty_language_to_chr_cls_cd(language, chrClsCd),
+    }
+
+    res = call_law_api(LAW_SERVICE_URL, params=params)
+    data = parse_law_response(res, response_type_upper)
+
+    return {
+        "treaty_id": selected_treaty_id,
+        "selected_treaty": selected_treaty,
+        "query": query,
+        "language": language,
+        "chrClsCd": params["chrClsCd"],
+        "response_type": response_type_upper,
+        "data": data,
+        "note": (
+            "국가법령정보 조약 본문 API 결과입니다. 제한세율·원천징수 적용 판단은 "
+            "조약상 수익적 소유자 요건, 국내세법상 원천징수 규정, 거주자증명서, 실질귀속자, "
+            "LOB 조항 및 관련 예규·판례를 함께 확인해야 합니다."
+        ),
     }
 
 
