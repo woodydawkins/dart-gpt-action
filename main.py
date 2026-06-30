@@ -10,9 +10,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = FastAPI(
-    title="DART GPT Action API",
-    version="1.0.0",
-    description="API server for connecting Custom GPT Actions to OpenDART."
+    title="DART Disclosure Research API",
+    version="1.1.0",
+    description=(
+        "API server for connecting Custom GPT Actions to OpenDART. "
+        "It supports searching DART-registered companies, including listed companies "
+        "and non-listed companies with DART disclosure records."
+    )
 )
 
 DART_API_KEY = os.getenv("DART_API_KEY")
@@ -22,7 +26,8 @@ DART_API_KEY = os.getenv("DART_API_KEY")
 def root():
     return {
         "status": "ok",
-        "message": "DART GPT Action API is running."
+        "message": "DART Disclosure Research API is running.",
+        "scope": "DART-registered companies, including listed and non-listed disclosure companies."
     }
 
 
@@ -34,11 +39,43 @@ def debug_env():
     }
 
 
+def normalize_stock_code(stock_code: str | None) -> str:
+    """
+    DART corpCode.xml의 stock_code는 비상장사인 경우 빈 값일 수 있습니다.
+    """
+    return (stock_code or "").strip()
+
+
+def is_listed_company(company: dict) -> bool:
+    """
+    종목코드가 있으면 상장사로 간주합니다.
+    """
+    return bool(normalize_stock_code(company.get("stock_code")))
+
+
+def add_company_metadata(company: dict) -> dict:
+    """
+    GPT가 상장사/비상장 공시기업 여부를 명확히 이해할 수 있도록
+    is_listed 및 company_type을 추가합니다.
+    """
+    stock_code = normalize_stock_code(company.get("stock_code"))
+    is_listed = bool(stock_code)
+
+    enriched = dict(company)
+    enriched["stock_code"] = stock_code
+    enriched["is_listed"] = is_listed
+    enriched["company_type"] = "listed_company" if is_listed else "non_listed_disclosure_company"
+
+    return enriched
+
+
 @lru_cache(maxsize=1)
 def load_corp_codes():
     """
     OpenDART corpCode.xml을 다운로드하여
     회사명, 종목코드, DART 고유번호 목록을 캐싱합니다.
+
+    corpCode.xml에는 상장사뿐 아니라 DART에 등록된 비상장 공시기업도 포함될 수 있습니다.
     """
 
     if not DART_API_KEY:
@@ -84,12 +121,18 @@ def load_corp_codes():
 
         companies = []
         for item in root_xml.findall("list"):
-            companies.append({
+            stock_code = normalize_stock_code(item.findtext("stock_code"))
+
+            company = {
                 "corp_code": item.findtext("corp_code"),
                 "corp_name": item.findtext("corp_name"),
-                "stock_code": item.findtext("stock_code"),
+                "stock_code": stock_code,
+                "is_listed": bool(stock_code),
+                "company_type": "listed_company" if stock_code else "non_listed_disclosure_company",
                 "modify_date": item.findtext("modify_date"),
-            })
+            }
+
+            companies.append(company)
 
         return companies
 
@@ -98,13 +141,6 @@ def load_corp_codes():
             status_code=500,
             detail=f"corpCode.xml 파싱 실패: {str(e)}"
         )
-
-
-def is_listed_company(company: dict) -> bool:
-    """
-    종목코드가 있으면 상장사로 간주합니다.
-    """
-    return bool((company.get("stock_code") or "").strip())
 
 
 def find_best_company(company_name: str):
@@ -117,6 +153,10 @@ def find_best_company(company_name: str):
     3. 회사명 정확일치
     4. 회사명 부분일치 + 상장사
     5. 회사명 부분일치
+
+    취지:
+    - '삼성전자'처럼 상장사와 비상장 계열사가 함께 검색될 수 있는 경우 상장사를 우선 선택합니다.
+    - 다만 사용자가 비상장 회사명을 정확히 입력한 경우 비상장 공시기업도 선택될 수 있습니다.
     """
 
     companies = load_corp_codes()
@@ -125,10 +165,10 @@ def find_best_company(company_name: str):
     # 1순위: 종목코드 정확일치
     stock_code_match = [
         c for c in companies
-        if (c.get("stock_code") or "").strip() == query
+        if normalize_stock_code(c.get("stock_code")) == query
     ]
     if stock_code_match:
-        return stock_code_match[0]
+        return add_company_metadata(stock_code_match[0])
 
     # 2순위: 회사명이 정확히 일치하고 종목코드가 있는 회사
     exact_listed = [
@@ -136,7 +176,7 @@ def find_best_company(company_name: str):
         if c.get("corp_name") == query and is_listed_company(c)
     ]
     if exact_listed:
-        return exact_listed[0]
+        return add_company_metadata(exact_listed[0])
 
     # 3순위: 회사명이 정확히 일치하는 회사
     exact = [
@@ -144,7 +184,7 @@ def find_best_company(company_name: str):
         if c.get("corp_name") == query
     ]
     if exact:
-        return exact[0]
+        return add_company_metadata(exact[0])
 
     # 4순위: 회사명에 검색어가 포함되고 종목코드가 있는 회사
     partial_listed = [
@@ -152,7 +192,7 @@ def find_best_company(company_name: str):
         if query in (c.get("corp_name") or "") and is_listed_company(c)
     ]
     if partial_listed:
-        return partial_listed[0]
+        return add_company_metadata(partial_listed[0])
 
     # 5순위: 회사명에 검색어가 포함되는 회사
     partial = [
@@ -160,7 +200,7 @@ def find_best_company(company_name: str):
         if query in (c.get("corp_name") or "")
     ]
     if partial:
-        return partial[0]
+        return add_company_metadata(partial[0])
 
     return None
 
@@ -179,10 +219,10 @@ def sort_company_results(results: list, query: str) -> list:
 
     query_clean = query.strip()
 
-    return sorted(
+    sorted_results = sorted(
         results,
         key=lambda c: (
-            not ((c.get("stock_code") or "").strip() == query_clean),
+            not (normalize_stock_code(c.get("stock_code")) == query_clean),
             not (c.get("corp_name") == query_clean and is_listed_company(c)),
             not (c.get("corp_name") == query_clean),
             not is_listed_company(c),
@@ -190,41 +230,68 @@ def sort_company_results(results: list, query: str) -> list:
         )
     )
 
+    return [add_company_metadata(c) for c in sorted_results]
+
 
 @app.get("/dart/search-company")
 def search_company(
-    query: str = Query(..., description="회사명 또는 종목코드. 예: 삼성전자, 005930")
+    query: str = Query(
+        ...,
+        description="회사명 또는 종목코드. 예: 삼성전자, 삼성전자판매, 005930"
+    )
 ):
+    """
+    DART 등록 기업을 회사명 또는 종목코드로 검색합니다.
+
+    검색 대상:
+    - 상장사
+    - 비상장 외감법인
+    - 비상장 계열사
+    - 기타 DART 공시기업
+    """
+
     companies = load_corp_codes()
     query_clean = query.strip()
 
     results = []
     for c in companies:
         corp_name = c.get("corp_name") or ""
-        stock_code = c.get("stock_code") or ""
+        stock_code = normalize_stock_code(c.get("stock_code"))
 
         if query_clean in corp_name or query_clean == stock_code:
             results.append(c)
 
     sorted_results = sort_company_results(results, query_clean)
-
     best_company = find_best_company(query_clean)
 
     return {
         "query": query,
         "count": len(sorted_results),
         "best_company": best_company,
-        "results": sorted_results[:20]
+        "results": sorted_results[:20],
+        "note": (
+            "Search covers DART-registered companies. "
+            "If multiple companies match, listed companies and exact matches are prioritized."
+        )
     }
 
 
 @app.get("/dart/disclosures")
 def get_disclosures(
-    company_name: str = Query(..., description="회사명 또는 종목코드. 예: 삼성전자, 005930"),
+    company_name: str = Query(
+        ...,
+        description="회사명 또는 종목코드. 예: 삼성전자, 삼성전자판매, 005930"
+    ),
     start_date: str = Query(..., description="조회 시작일 YYYYMMDD"),
     end_date: str = Query(..., description="조회 종료일 YYYYMMDD"),
     page_count: int = Query(30, description="조회 건수")
 ):
+    """
+    DART 공시목록을 조회합니다.
+
+    상장사뿐 아니라 DART에 공시된 비상장 기업도 corp_code가 식별되면 조회할 수 있습니다.
+    """
+
     company = find_best_company(company_name)
 
     if not company:
@@ -264,7 +331,7 @@ def get_disclosures(
         receipt_no = item.get("rcept_no")
         disclosures.append({
             "corp_name": item.get("corp_name"),
-            "stock_code": item.get("stock_code"),
+            "stock_code": normalize_stock_code(item.get("stock_code")),
             "report_name": item.get("report_nm"),
             "receipt_no": receipt_no,
             "receipt_date": item.get("rcept_dt"),
@@ -279,16 +346,34 @@ def get_disclosures(
         "end_date": end_date,
         "status": data.get("status"),
         "message": data.get("message"),
-        "disclosures": disclosures
+        "disclosures": disclosures,
+        "note": (
+            "Disclosure search can cover both listed and non-listed companies "
+            "if the company is registered in DART and has disclosure records."
+        )
     }
 
 
 @app.get("/dart/financials")
 def get_financials(
-    company_name: str = Query(..., description="회사명 또는 종목코드. 예: 삼성전자, 005930"),
+    company_name: str = Query(
+        ...,
+        description="회사명 또는 종목코드. 예: 삼성전자, 삼성전자판매, 005930"
+    ),
     year: str = Query(..., description="사업연도. 예: 2025"),
-    report_code: str = Query(..., description="보고서 코드: 11011 사업보고서, 11012 반기, 11013 1분기, 11014 3분기")
+    report_code: str = Query(
+        ...,
+        description="보고서 코드: 11011 사업보고서, 11012 반기, 11013 1분기, 11014 3분기"
+    )
 ):
+    """
+    DART 주요 재무제표 계정 정보를 조회합니다.
+
+    유의사항:
+    - 상장사는 대체로 조회 가능성이 높습니다.
+    - 비상장 공시기업은 공시목록이 조회되더라도 fnlttSinglAcnt API 결과가 없을 수 있습니다.
+    """
+
     company = find_best_company(company_name)
 
     if not company:
@@ -344,5 +429,9 @@ def get_financials(
         "report_code": report_code,
         "status": data.get("status"),
         "message": data.get("message"),
-        "accounts": accounts
+        "accounts": accounts,
+        "note": (
+            "Financial statement API results may be limited for non-listed companies "
+            "or companies not covered by the DART financial statement API."
+        )
     }
