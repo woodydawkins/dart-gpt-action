@@ -55,6 +55,13 @@ def root():
     }
 
 
+@app.get("/debug/env")
+def debug_env():
+    return {
+        "has_dart_api_key": bool(DART_API_KEY),
+        "api_key_length": len(DART_API_KEY) if DART_API_KEY else 0
+    }
+
 @app.get("/dart/search-company")
 def search_company(
     query: str = Query(..., description="회사명 또는 종목코드. 예: 삼성전자, 005930")
