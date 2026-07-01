@@ -5,19 +5,20 @@ import requests
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Body
 from dotenv import load_dotenv
 from typing import Any, Optional
+from urllib.parse import unquote
 
 load_dotenv()
 
 app = FastAPI(
-    title="DART·KRX Disclosure & Market Research API",
-    version="1.7.0",
+    title="DART·KRX·NTS·LAW Disclosure & Market Research API",
+    version="1.8.0",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
-        "and Korea Law Open API. It supports DART-registered companies, including listed and non-listed disclosure companies, "
-        "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, legal search/article lookup, "
+        "Korea Law Open API, and NTS Business Registration API. It supports DART-registered companies, including listed and non-listed disclosure companies, "
+        "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, NTS business registration status/validation, legal search/article lookup, "
         "treaty search/detail lookup, and tax-law research endpoints for cases, appeals, interpretations, administrative rules, attachments, histories, comparisons, terms, and related laws."
     )
 )
@@ -60,6 +61,12 @@ LAW_OC = os.getenv("LAW_OC")
 LAW_SEARCH_URL = "https://www.law.go.kr/DRF/lawSearch.do"
 LAW_SERVICE_URL = "https://www.law.go.kr/DRF/lawService.do"
 
+# NTS 사업자등록정보 진위확인 및 상태조회 API
+# 공공데이터포털: 국세청_사업자등록정보 진위확인 및 상태조회 서비스
+NTS_SERVICE_KEY = os.getenv("NTS_SERVICE_KEY")
+NTS_BUSINESS_STATUS_URL = "https://api.odcloud.kr/api/nts-businessman/v1/status"
+NTS_BUSINESS_VALIDATE_URL = "https://api.odcloud.kr/api/nts-businessman/v1/validate"
+
 # =========================================================
 # Root / debug
 # =========================================================
@@ -72,7 +79,8 @@ def root():
         "scope": {
             "dart": "DART-registered companies, including listed and non-listed disclosure companies.",
             "krx": "KRX market data for KOSPI, KOSDAQ, KONEX, and ETF if API URLs and key are configured.",
-            "law": "Korea Law Open API search, article lookup, and treaty lookup if LAW_OC is configured."
+            "law": "Korea Law Open API search, article lookup, and treaty lookup if LAW_OC is configured.",
+            "nts": "NTS business registration status and validation lookup if NTS_SERVICE_KEY is configured."
         },
         "endpoints": {
             "dart": [
@@ -84,6 +92,10 @@ def root():
                 "/krx/search-stock",
                 "/krx/daily-price",
                 "/krx/raw"
+            ],
+            "nts": [
+                "/nts/business-status",
+                "/nts/business-validate"
             ],
             "law": [
                 "/law/search",
@@ -152,6 +164,11 @@ def debug_env():
         "law_oc_length": len(LAW_OC) if LAW_OC else 0,
         "law_search_url": LAW_SEARCH_URL,
         "law_service_url": LAW_SERVICE_URL,
+
+        "has_nts_service_key": bool(NTS_SERVICE_KEY),
+        "nts_service_key_length": len(NTS_SERVICE_KEY) if NTS_SERVICE_KEY else 0,
+        "nts_business_status_url": NTS_BUSINESS_STATUS_URL,
+        "nts_business_validate_url": NTS_BUSINESS_VALIDATE_URL,
     }
 
 
@@ -221,6 +238,347 @@ def date_range_yyyymmdd(start_date: str, end_date: str):
 
     return dates
 
+
+
+
+# =========================================================
+# NTS helpers / endpoints
+# =========================================================
+
+def require_nts_service_key() -> str:
+    """
+    국세청 사업자등록정보 진위확인 및 상태조회 API 인증키 확인.
+    Render 환경변수 또는 .env 파일에 NTS_SERVICE_KEY를 설정해야 합니다.
+    """
+    if not NTS_SERVICE_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="NTS_SERVICE_KEY가 설정되어 있지 않습니다. Render 환경변수 또는 .env 파일을 확인하세요."
+        )
+
+    # 공공데이터포털의 Encoding 키를 넣은 경우를 대비해 1회 decode합니다.
+    # Decoding 키를 넣은 경우에도 unquote는 일반적으로 문제를 일으키지 않습니다.
+    return unquote(NTS_SERVICE_KEY)
+
+
+def normalize_business_number(value: Any) -> str:
+    """
+    사업자등록번호에서 숫자만 남깁니다.
+    예: 123-45-67890 -> 1234567890
+    """
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
+def normalize_yyyymmdd_digits(value: Any) -> str:
+    """
+    개업일자 등 YYYYMMDD 형식 날짜에서 숫자만 남깁니다.
+    예: 2020-01-31 -> 20200131
+    """
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
+def extract_business_numbers_from_body(request_body: Any) -> list[str]:
+    """
+    GPT Action과 Swagger 테스트 편의를 위해 아래 입력을 모두 허용합니다.
+    1) ["1234567890", "123-45-67890"]
+    2) {"business_numbers": ["1234567890"]}
+    3) {"b_no": ["1234567890"]}
+    """
+    if isinstance(request_body, list):
+        raw_numbers = request_body
+    elif isinstance(request_body, dict):
+        raw_numbers = (
+            request_body.get("business_numbers")
+            or request_body.get("b_no")
+            or request_body.get("businessNumbers")
+            or []
+        )
+    else:
+        raw_numbers = []
+
+    if isinstance(raw_numbers, str):
+        raw_numbers = [raw_numbers]
+
+    numbers = []
+    seen = set()
+    for raw in raw_numbers:
+        b_no = normalize_business_number(raw)
+        if b_no and b_no not in seen:
+            numbers.append(b_no)
+            seen.add(b_no)
+
+    return numbers
+
+
+def validate_business_numbers_or_raise(numbers: list[str]) -> None:
+    if not numbers:
+        raise HTTPException(
+            status_code=400,
+            detail="사업자등록번호를 1개 이상 입력하세요. 예: {'business_numbers': ['1234567890']}"
+        )
+
+    if len(numbers) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="국세청 API는 1회 최대 100개 사업자등록번호까지 조회할 수 있습니다."
+        )
+
+    invalid_numbers = [b_no for b_no in numbers if len(b_no) != 10]
+    if invalid_numbers:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "사업자등록번호는 숫자 10자리여야 합니다.",
+                "invalid_numbers": invalid_numbers,
+            }
+        )
+
+
+def normalize_nts_status_items(data: Any) -> list[dict[str, Any]]:
+    """
+    국세청 상태조회 응답에서 실무적으로 자주 쓰는 필드를 정규화합니다.
+    원문은 raw에 함께 보존합니다.
+    """
+    if not isinstance(data, dict):
+        return []
+
+    items = data.get("data") or []
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        return []
+
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        normalized.append({
+            "business_number": item.get("b_no"),
+            "business_status": item.get("b_stt"),
+            "business_status_code": item.get("b_stt_cd"),
+            "tax_type": item.get("tax_type"),
+            "tax_type_code": item.get("tax_type_cd"),
+            "closure_date": item.get("end_dt"),
+            "unit_tax_conversion_closure_yn": item.get("utcc_yn"),
+            "tax_type_change_date": item.get("tax_type_change_dt"),
+            "invoice_apply_date": item.get("invoice_apply_dt"),
+            "raw": item,
+        })
+
+    return normalized
+
+
+def extract_business_validate_records(request_body: Any) -> list[dict[str, Any]]:
+    """
+    진위확인 API 입력값을 정규화합니다.
+    허용 입력:
+    1) {"businesses": [{"b_no": "...", "start_dt": "YYYYMMDD", "p_nm": "대표자명"}]}
+    2) [{"b_no": "...", "start_dt": "YYYYMMDD", "p_nm": "대표자명"}]
+    3) {"b_no": "...", "start_dt": "YYYYMMDD", "p_nm": "대표자명"}
+    """
+    if isinstance(request_body, dict) and isinstance(request_body.get("businesses"), list):
+        raw_records = request_body.get("businesses")
+    elif isinstance(request_body, dict) and isinstance(request_body.get("business"), dict):
+        raw_records = [request_body.get("business")]
+    elif isinstance(request_body, list):
+        raw_records = request_body
+    elif isinstance(request_body, dict):
+        raw_records = [request_body]
+    else:
+        raw_records = []
+
+    records = []
+    for raw in raw_records:
+        if not isinstance(raw, dict):
+            continue
+
+        b_no = normalize_business_number(raw.get("b_no") or raw.get("business_number") or raw.get("businessNumber"))
+        start_dt = normalize_yyyymmdd_digits(raw.get("start_dt") or raw.get("startDate") or raw.get("opening_date"))
+        p_nm = normalize_text(raw.get("p_nm") or raw.get("representative_name") or raw.get("representativeName"))
+
+        record = {
+            "b_no": b_no,
+            "start_dt": start_dt,
+            "p_nm": p_nm,
+        }
+
+        # 국세청 진위확인 API의 선택 입력값들
+        optional_map = {
+            "p_nm2": ["p_nm2", "representative_name2", "representativeName2"],
+            "b_nm": ["b_nm", "business_name", "businessName"],
+            "corp_no": ["corp_no", "corporate_registration_number", "corporateRegistrationNumber"],
+            "b_sector": ["b_sector", "business_sector", "businessSector"],
+            "b_type": ["b_type", "business_type", "businessType"],
+            "b_adr": ["b_adr", "business_address", "businessAddress"],
+        }
+        for target_key, source_keys in optional_map.items():
+            value = None
+            for source_key in source_keys:
+                if raw.get(source_key) is not None:
+                    value = raw.get(source_key)
+                    break
+            if value is not None and normalize_text(value) != "":
+                if target_key == "corp_no":
+                    record[target_key] = normalize_business_number(value)
+                else:
+                    record[target_key] = normalize_text(value)
+
+        records.append(record)
+
+    return records
+
+
+def validate_business_validate_records_or_raise(records: list[dict[str, Any]]) -> None:
+    if not records:
+        raise HTTPException(
+            status_code=400,
+            detail="진위확인할 사업자 정보를 1개 이상 입력하세요. 필수값: b_no, start_dt, p_nm"
+        )
+
+    if len(records) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="국세청 API는 1회 최대 100개 사업자등록정보까지 진위확인할 수 있습니다."
+        )
+
+    invalid = []
+    for idx, record in enumerate(records):
+        errors = []
+        if len(record.get("b_no", "")) != 10:
+            errors.append("b_no must be 10 digits")
+        if len(record.get("start_dt", "")) != 8:
+            errors.append("start_dt must be YYYYMMDD")
+        if not record.get("p_nm"):
+            errors.append("p_nm is required")
+        if errors:
+            invalid.append({"index": idx, "record": record, "errors": errors})
+
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "진위확인 필수값 또는 형식이 올바르지 않습니다.",
+                "invalid_records": invalid,
+            }
+        )
+
+
+@app.post("/nts/business-status")
+def nts_business_status(
+    request_body: Any = Body(
+        ...,
+        description=(
+            "사업자등록번호 목록. 예: {'business_numbers': ['1234567890', '123-45-67890']} "
+            "또는 ['1234567890']"
+        ),
+    )
+):
+    """
+    국세청 사업자등록 상태조회.
+    사업자등록번호만으로 계속사업자/휴업/폐업 여부, 과세유형, 폐업일자 등을 조회합니다.
+    """
+    service_key = require_nts_service_key()
+    business_numbers = extract_business_numbers_from_body(request_body)
+    validate_business_numbers_or_raise(business_numbers)
+
+    params = {
+        "serviceKey": service_key,
+        "returnType": "JSON",
+    }
+    payload = {
+        "b_no": business_numbers,
+    }
+
+    try:
+        res = requests.post(
+            NTS_BUSINESS_STATUS_URL,
+            params=params,
+            json=payload,
+            timeout=30,
+        )
+        res.raise_for_status()
+        data = res.json()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"국세청 사업자등록 상태조회 API 요청 실패: {str(e)}"
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"국세청 API 응답이 JSON이 아닙니다. 응답 앞부분: {res.text[:500]}"
+        )
+
+    return {
+        "count": len(business_numbers),
+        "business_numbers": business_numbers,
+        "results": normalize_nts_status_items(data),
+        "data": data,
+        "note": (
+            "국세청 사업자등록 상태조회 결과입니다. 신규 개업자는 API 반영에 시간이 걸릴 수 있으며, "
+            "감사/FDD/세무 검토 시에는 조회일과 원천자료를 함께 보관하는 것을 권장합니다."
+        ),
+    }
+
+
+@app.post("/nts/business-validate")
+def nts_business_validate(
+    request_body: Any = Body(
+        ...,
+        description=(
+            "사업자등록 진위확인 정보. 필수값: b_no, start_dt, p_nm. "
+            "예: {'businesses': [{'b_no': '1234567890', 'start_dt': '20200101', 'p_nm': '홍길동'}]}"
+        ),
+    )
+):
+    """
+    국세청 사업자등록정보 진위확인.
+    사업자등록번호, 개업일자, 대표자명 등을 국세청 등록정보와 대조합니다.
+    """
+    service_key = require_nts_service_key()
+    records = extract_business_validate_records(request_body)
+    validate_business_validate_records_or_raise(records)
+
+    params = {
+        "serviceKey": service_key,
+        "returnType": "JSON",
+    }
+    payload = {
+        "businesses": records,
+    }
+
+    try:
+        res = requests.post(
+            NTS_BUSINESS_VALIDATE_URL,
+            params=params,
+            json=payload,
+            timeout=30,
+        )
+        res.raise_for_status()
+        data = res.json()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"국세청 사업자등록 진위확인 API 요청 실패: {str(e)}"
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"국세청 API 응답이 JSON이 아닙니다. 응답 앞부분: {res.text[:500]}"
+        )
+
+    return {
+        "count": len(records),
+        "businesses": records,
+        "data": data,
+        "note": (
+            "국세청 사업자등록 진위확인 결과입니다. 대표자명, 개업일자 등 입력값이 국세청 등록정보와 일치하는지 확인하는 용도입니다."
+        ),
+    }
 
 
 # =========================================================
