@@ -14,7 +14,7 @@ load_dotenv()
 
 app = FastAPI(
     title="DART·KRX·NTS·LAW·FSC Disclosure & Market Research API",
-    version="1.9.0",
+    version="1.9.1",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
         "Korea Law Open API, NTS Business Registration API, and FSC company information APIs. It supports DART-registered companies, including listed and non-listed disclosure companies, "
@@ -69,17 +69,33 @@ NTS_BUSINESS_VALIDATE_URL = "https://api.odcloud.kr/api/nts-businessman/v1/valid
 
 # FSC 기업기본정보 API
 # 공공데이터포털: 금융위원회_기업기본정보
-# 실제 operation URL은 공공데이터포털 활용신청 후 제공되는 상세 URL을 Render 환경변수로 설정하세요.
+# 활용가이드 기준 service URL: https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2
+# 상세기능명: getCorpOutline_V2, getAffiliate_V2, getConsSubsComp_V2
 FSC_SERVICE_KEY = os.getenv("FSC_SERVICE_KEY")
-FSC_COMPANY_OVERVIEW_URL = os.getenv("FSC_COMPANY_OVERVIEW_URL")
-FSC_AFFILIATES_URL = os.getenv("FSC_AFFILIATES_URL")
-FSC_SUBSIDIARIES_URL = os.getenv("FSC_SUBSIDIARIES_URL")
+FSC_BASE_SERVICE_URL = os.getenv(
+    "FSC_BASE_SERVICE_URL",
+    "https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2",
+).rstrip("/")
+FSC_COMPANY_OVERVIEW_URL = os.getenv(
+    "FSC_COMPANY_OVERVIEW_URL",
+    f"{FSC_BASE_SERVICE_URL}/getCorpOutline_V2",
+)
+FSC_AFFILIATES_URL = os.getenv(
+    "FSC_AFFILIATES_URL",
+    f"{FSC_BASE_SERVICE_URL}/getAffiliate_V2",
+)
+FSC_SUBSIDIARIES_URL = os.getenv(
+    "FSC_SUBSIDIARIES_URL",
+    f"{FSC_BASE_SERVICE_URL}/getConsSubsComp_V2",
+)
 
-# 금융위 API별 파라미터명이 환경에 따라 다를 수 있어 환경변수로 조정 가능하게 둡니다.
+# 금융위 API 파라미터명. 활용가이드 기준 공통 파라미터는 pageNo, numOfRows, resultType, serviceKey.
+# 회사명 검색은 요청 예제에서 fnccmpNm을 사용하므로 기본값을 fnccmpNm으로 둡니다.
+# 개별 상세기능별 공식 항목명도 함께 전송하도록 build_fsc_query_params에서 보완합니다.
 FSC_PARAM_BASE_DATE = os.getenv("FSC_PARAM_BASE_DATE", "basDt")
-FSC_PARAM_COMPANY_NAME = os.getenv("FSC_PARAM_COMPANY_NAME", "corpNm")
-FSC_PARAM_CORP_REG_NO = os.getenv("FSC_PARAM_CORP_REG_NO", "jurirno")
-FSC_PARAM_BUSINESS_NO = os.getenv("FSC_PARAM_BUSINESS_NO", "bzrno")
+FSC_PARAM_COMPANY_NAME = os.getenv("FSC_PARAM_COMPANY_NAME", "fnccmpNm")
+FSC_PARAM_CORP_REG_NO = os.getenv("FSC_PARAM_CORP_REG_NO", "crno")
+FSC_PARAM_BUSINESS_NO = os.getenv("FSC_PARAM_BUSINESS_NO", "bzno")
 FSC_PARAM_PAGE_NO = os.getenv("FSC_PARAM_PAGE_NO", "pageNo")
 FSC_PARAM_NUM_OF_ROWS = os.getenv("FSC_PARAM_NUM_OF_ROWS", "numOfRows")
 FSC_PARAM_RESULT_TYPE = os.getenv("FSC_PARAM_RESULT_TYPE", "resultType")
@@ -329,6 +345,50 @@ def fsc_clean_params(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def xml_element_to_dict(element: ET.Element) -> Any:
+    """
+    공공데이터포털 XML 응답을 JSON과 유사한 dict/list 구조로 변환합니다.
+    JSON 요청이 XML로 반환되는 예외 케이스를 방어하기 위한 fallback입니다.
+    """
+    children = list(element)
+    if not children:
+        return element.text or ""
+
+    result: dict[str, Any] = {}
+    for child in children:
+        child_value = xml_element_to_dict(child)
+        if child.tag in result:
+            if not isinstance(result[child.tag], list):
+                result[child.tag] = [result[child.tag]]
+            result[child.tag].append(child_value)
+        else:
+            result[child.tag] = child_value
+    return result
+
+
+def parse_fsc_response(res: requests.Response) -> dict[str, Any]:
+    """
+    FSC API 응답 파싱. resultType=json이 정상 동작하면 JSON을 반환하고,
+    JSON 파싱 실패 시 XML fallback을 시도합니다.
+    """
+    try:
+        data = res.json()
+        if isinstance(data, dict):
+            return data
+        return {"data": data}
+    except ValueError:
+        pass
+
+    try:
+        root = ET.fromstring(res.content)
+        return {root.tag: xml_element_to_dict(root)}
+    except ET.ParseError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"FSC API 응답이 JSON/XML이 아닙니다. 응답 앞부분: {res.text[:500]}"
+        )
+
+
 def call_fsc_api(api_url: str, params: dict[str, Any]) -> dict[str, Any]:
     """
     금융위원회 기업기본정보 API 공통 호출 함수.
@@ -342,7 +402,7 @@ def call_fsc_api(api_url: str, params: dict[str, Any]) -> dict[str, Any]:
     clean_params = fsc_clean_params(params)
     clean_params["serviceKey"] = require_fsc_service_key()
 
-    # 공공데이터포털 JSON 응답 요청 파라미터. API별로 resultType 또는 _type 등을 쓰는 경우가 있어 환경변수로 조정 가능.
+    # 공공데이터포털 JSON 응답 요청 파라미터. 활용가이드 기준 resultType=xml/json.
     if FSC_PARAM_RESULT_TYPE:
         clean_params.setdefault(FSC_PARAM_RESULT_TYPE, FSC_RESULT_TYPE_VALUE)
 
@@ -355,19 +415,14 @@ def call_fsc_api(api_url: str, params: dict[str, Any]) -> dict[str, Any]:
             detail=f"FSC API 요청 실패: {str(e)}"
         )
 
-    try:
-        return res.json()
-    except ValueError:
-        raise HTTPException(
-            status_code=502,
-            detail=f"FSC API 응답이 JSON이 아닙니다. 응답 앞부분: {res.text[:500]}"
-        )
+    return parse_fsc_response(res)
 
 
 def extract_public_data_items(data: Any) -> list[Any]:
     """
     공공데이터포털 계열 API의 response.body.items.item 구조와
     data/list/result 등 여러 응답 구조에서 item 목록을 유연하게 추출합니다.
+    JSON/XML 변환 결과를 모두 방어합니다.
     """
     if isinstance(data, list):
         return data
@@ -405,6 +460,27 @@ def extract_public_data_items(data: Any) -> list[Any]:
     return []
 
 
+def get_public_data_result(data: Any) -> dict[str, Any]:
+    """공공데이터포털 표준 응답의 header/body 메타데이터를 정리합니다."""
+    if not isinstance(data, dict):
+        return {}
+
+    response = data.get("response")
+    if not isinstance(response, dict):
+        return {}
+
+    header = response.get("header") or {}
+    body = response.get("body") or {}
+
+    return {
+        "result_code": header.get("resultCode"),
+        "result_message": header.get("resultMsg"),
+        "page_no": body.get("pageNo"),
+        "num_of_rows": body.get("numOfRows"),
+        "total_count": body.get("totalCount"),
+    }
+
+
 def build_fsc_query_params(
     company_name: Optional[str],
     corporate_registration_number: Optional[str],
@@ -412,16 +488,50 @@ def build_fsc_query_params(
     base_date: Optional[str],
     page_no: int,
     num_of_rows: int,
+    api_kind: str = "overview",
     extra_params: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    params = {
+    """
+    금융위 기업기본정보 API 요청 파라미터 생성.
+
+    활용가이드상 공통 필수값: pageNo, numOfRows, resultType, serviceKey.
+    검색조건은 모두 선택값이며, 상세기능별로 아래 항목을 사용합니다.
+    - 기업개요조회: crno, corpNm / 요청 예제: fnccmpNm
+    - 계열회사조회: basDt, crno, afilCmpyNm / 요청 예제: fnccmpNm
+    - 연결대상종속기업조회: basDt, crno, sbrdEnpNm / 요청 예제: fnccmpNm
+
+    호환성을 높이기 위해 회사명은 기본 fnccmpNm과 상세기능별 공식 명칭을 함께 전송합니다.
+    """
+    corp_reg_no = normalize_corporate_registration_number(corporate_registration_number)
+    business_no = normalize_business_number(business_registration_number)
+    company_name_clean = normalize_text(company_name)
+    base_date_clean = normalize_fsc_base_date(base_date)
+
+    params: dict[str, Any] = {
         FSC_PARAM_PAGE_NO: page_no,
         FSC_PARAM_NUM_OF_ROWS: num_of_rows,
-        FSC_PARAM_BASE_DATE: normalize_fsc_base_date(base_date),
-        FSC_PARAM_COMPANY_NAME: normalize_text(company_name),
-        FSC_PARAM_CORP_REG_NO: normalize_corporate_registration_number(corporate_registration_number),
-        FSC_PARAM_BUSINESS_NO: normalize_business_number(business_registration_number),
+        FSC_PARAM_RESULT_TYPE: FSC_RESULT_TYPE_VALUE,
     }
+
+    if base_date_clean:
+        params[FSC_PARAM_BASE_DATE] = base_date_clean
+    if corp_reg_no:
+        params[FSC_PARAM_CORP_REG_NO] = corp_reg_no
+    if business_no:
+        params[FSC_PARAM_BUSINESS_NO] = business_no
+
+    if company_name_clean:
+        # 활용가이드 요청 예제의 회사명 파라미터
+        params[FSC_PARAM_COMPANY_NAME] = company_name_clean
+        params.setdefault("fnccmpNm", company_name_clean)
+
+        # 상세기능별 공식 요청 항목명도 함께 전송해 API 버전/문서 차이를 흡수
+        if api_kind == "overview":
+            params.setdefault("corpNm", company_name_clean)
+        elif api_kind == "affiliates":
+            params.setdefault("afilCmpyNm", company_name_clean)
+        elif api_kind == "subsidiaries":
+            params.setdefault("sbrdEnpNm", company_name_clean)
 
     if extra_params:
         params.update(extra_params)
@@ -431,47 +541,86 @@ def build_fsc_query_params(
 
 def normalize_fsc_company_item(item: dict[str, Any]) -> dict[str, Any]:
     """
-    금융위 기업기본정보 응답의 필드명이 API 버전별로 다를 수 있어
-    주요 후보 필드를 표준화하고 raw를 보존합니다.
+    금융위 기업기본정보 기업개요 응답의 주요 필드를 표준화하고 raw를 보존합니다.
+    활용가이드 기준 주요 필드: crno, corpNm, corpEnsnNm, enpRprFnm, bzno,
+    enpBsadr, enpDtadr, sicNm, enpEstbDt, enpStacMm, 상장일자, 종업원수,
+    회계감사인, 감사의견, 주요사업, fssCorpUnqNo 등.
     """
     if not isinstance(item, dict):
         return {"raw": item}
 
     return {
         "base_date": pick_first(item, "basDt", "baseDate", "기준일자", "기준일"),
-        "company_name": pick_first(item, "corpNm", "corpName", "crpNm", "기업명", "회사명", "법인명"),
-        "corporate_registration_number": pick_first(item, "jurirno", "corpRegNo", "crno", "법인등록번호"),
-        "business_registration_number": pick_first(item, "bzrno", "bizrNo", "brno", "사업자등록번호"),
-        "representative": pick_first(item, "rprsvNm", "reprNm", "ceoNm", "대표자명", "대표자"),
-        "establishment_date": pick_first(item, "estbDt", "fndnDt", "설립일자", "설립일"),
-        "industry": pick_first(item, "indutyNm", "indutyCdNm", "업종명", "업종"),
-        "industry_code": pick_first(item, "indutyCd", "업종코드"),
-        "main_business": pick_first(item, "mainBiz", "mnBiz", "주요사업", "주요영업"),
-        "employee_count": pick_first(item, "empCnt", "employeeCnt", "종업원수"),
-        "listed_status": pick_first(item, "lstgYn", "listedYn", "상장여부"),
-        "market": pick_first(item, "mktNm", "market", "시장구분"),
+        "company_name": pick_first(item, "corpNm", "enpPbanCmpyNm", "corpName", "crpNm", "기업명", "회사명", "법인명"),
+        "company_english_name": pick_first(item, "corpEnsnNm", "corpEnNm", "companyEnglishName"),
+        "corporate_registration_number": pick_first(item, "crno", "jurirno", "corpRegNo", "법인등록번호"),
+        "business_registration_number": pick_first(item, "bzno", "bzrno", "bizrNo", "brno", "사업자등록번호"),
+        "representative": pick_first(item, "enpRprFnm", "rprsvNm", "reprNm", "ceoNm", "대표자명", "대표자"),
+        "market_registration_code": pick_first(item, "corpRegMrktDcd", "marketRegistrationCode"),
+        "market_registration_name": pick_first(item, "corpRegMrktDcdNm", "marketRegistrationName"),
+        "corporation_type_code": pick_first(item, "corpDcd", "corporationTypeCode"),
+        "corporation_type_name": pick_first(item, "corpDcdNm", "corporationTypeName"),
+        "postal_code": pick_first(item, "enpOzpno", "postalCode"),
+        "address": pick_first(item, "enpBsadr", "address", "기본주소"),
+        "detail_address": pick_first(item, "enpDtadr", "detailAddress", "상세주소"),
+        "homepage_url": pick_first(item, "enpHmpgUrl", "homepageUrl"),
+        "phone_number": pick_first(item, "enpTlno", "phoneNumber"),
+        "fax_number": pick_first(item, "enpFxno", "faxNumber"),
+        "industry": pick_first(item, "sicNm", "indutyNm", "indutyCdNm", "업종명", "업종"),
+        "establishment_date": pick_first(item, "enpEstbDt", "estbDt", "fndnDt", "설립일자", "설립일"),
+        "fiscal_year_end_month": pick_first(item, "enpStacMm", "settlementMonth"),
+        "exchange_listing_date": pick_first(item, "enpXchgLstgDt"),
+        "exchange_delisting_date": pick_first(item, "enpXchgLstgAbolDt"),
+        "kosdaq_listing_date": pick_first(item, "enpKosdaqLstgDt"),
+        "kosdaq_delisting_date": pick_first(item, "enpKosdaqLstgAbolDt"),
+        "konex_listing_date": pick_first(item, "enpKrxLstgDt"),
+        "konex_delisting_date": pick_first(item, "enpKrxLstgAbolDt"),
+        "sme_yn": pick_first(item, "smenpYn"),
+        "main_bank": pick_first(item, "enpMntrBnkNm"),
+        "employee_count": pick_first(item, "enpEmpeCnt", "empCnt", "employeeCnt", "종업원수"),
+        "average_service_years": pick_first(item, "empeAvgCnwkTermCtt"),
+        "average_salary_amount": pick_first(item, "enpPn1AvgSlryAmt"),
+        "auditor_name": pick_first(item, "actnAudpnNm"),
+        "audit_opinion": pick_first(item, "audtRptOpnnCtt"),
+        "main_business": pick_first(item, "enpMainBizNm", "mainBiz", "mnBiz", "주요사업", "주요영업"),
+        "fss_corp_unique_number": pick_first(item, "fssCorpUnqNo"),
+        "fss_corp_change_date": pick_first(item, "fssCorpChgDtm"),
+        "first_open_date": pick_first(item, "fstOpegDt"),
+        "last_open_date": pick_first(item, "lastOpegDt"),
         "raw": item,
     }
 
 
-def normalize_fsc_relation_item(item: dict[str, Any]) -> dict[str, Any]:
-    """
-    계열회사/종속기업 계열 응답을 느슨하게 정규화합니다.
-    """
+def normalize_fsc_affiliate_item(item: dict[str, Any]) -> dict[str, Any]:
+    """금융위 기업기본정보 계열회사 응답을 정규화합니다."""
     if not isinstance(item, dict):
         return {"raw": item}
 
     return {
         "base_date": pick_first(item, "basDt", "baseDate", "기준일자", "기준일"),
-        "parent_company_name": pick_first(item, "corpNm", "parentCorpNm", "지배회사명", "회사명"),
-        "company_name": pick_first(item, "aflCoNm", "subsidiaryNm", "invstCoNm", "relCoNm", "기업명", "계열회사명", "종속기업명"),
-        "corporate_registration_number": pick_first(item, "jurirno", "corpRegNo", "crno", "법인등록번호"),
-        "business_registration_number": pick_first(item, "bzrno", "bizrNo", "brno", "사업자등록번호"),
-        "representative": pick_first(item, "rprsvNm", "reprNm", "ceoNm", "대표자명", "대표자"),
-        "establishment_date": pick_first(item, "estbDt", "fndnDt", "설립일자", "설립일"),
+        "parent_corporate_registration_number": pick_first(item, "crno", "jurirno", "corpRegNo", "법인등록번호"),
+        "affiliate_company_name": pick_first(item, "afilCmpyNm", "aflCoNm", "relCoNm", "계열회사명"),
+        "affiliate_corporate_registration_number": pick_first(item, "afilCmpyCrno", "affiliateCrno", "계열회사법인등록번호"),
         "listed_status": pick_first(item, "lstgYn", "listedYn", "상장여부"),
-        "ownership_percentage": pick_first(item, "holdRto", "ownRatio", "지분율", "소유비율"),
-        "relationship_type": pick_first(item, "relType", "관계구분", "계열구분", "종속구분"),
+        "raw": item,
+    }
+
+
+def normalize_fsc_subsidiary_item(item: dict[str, Any]) -> dict[str, Any]:
+    """금융위 기업기본정보 연결대상 종속기업 응답을 정규화합니다."""
+    if not isinstance(item, dict):
+        return {"raw": item}
+
+    return {
+        "base_date": pick_first(item, "basDt", "baseDate", "기준일자", "기준일"),
+        "parent_corporate_registration_number": pick_first(item, "crno", "jurirno", "corpRegNo", "법인등록번호"),
+        "subsidiary_name": pick_first(item, "sbrdEnpNm", "subsidiaryNm", "종속기업명"),
+        "subsidiary_establishment_date": pick_first(item, "sbrdEnpEstbDt", "subsidiaryEstablishmentDate"),
+        "subsidiary_address": pick_first(item, "sbrdEnpAdr", "sbrdEnpadr", "subsidiaryAddress"),
+        "subsidiary_main_business": pick_first(item, "sbrdEnpMainBizCtt", "subsidiaryMainBusiness"),
+        "subsidiary_latest_total_assets": pick_first(item, "sbrdEnpLtstEbzyrTastAmt", "subsidiaryLatestTotalAssets"),
+        "control_basis": pick_first(item, "dntRltBsisCtt", "controlBasis"),
+        "major_subsidiary_yn": pick_first(item, "mainSbrdEnpYnCtt", "majorSubsidiaryYn"),
         "raw": item,
     }
 
@@ -486,6 +635,17 @@ def require_fsc_lookup_key(
             status_code=400,
             detail="company_name, corporate_registration_number, business_registration_number 중 하나는 필요합니다."
         )
+
+
+def pick_first_fsc_crno(overview: dict[str, Any]) -> str:
+    """company-profile에서 기업개요 결과의 첫 번째 법인등록번호를 추출합니다."""
+    companies = overview.get("companies") or []
+    if not companies:
+        return ""
+    first = companies[0]
+    if not isinstance(first, dict):
+        return ""
+    return normalize_corporate_registration_number(first.get("corporate_registration_number"))
 
 
 @app.get("/fsc/company-overview")
@@ -510,6 +670,7 @@ def fsc_company_overview(
         base_date=base_date,
         page_no=page_no,
         num_of_rows=num_of_rows,
+        api_kind="overview",
     )
 
     data = call_fsc_api(FSC_COMPANY_OVERVIEW_URL, params)
@@ -521,6 +682,8 @@ def fsc_company_overview(
         "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
         "business_registration_number": normalize_business_number(business_registration_number),
         "base_date": normalize_fsc_base_date(base_date),
+        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
+        "api_result": get_public_data_result(data),
         "count": len(companies),
         "companies": companies,
         "raw": data,
@@ -552,17 +715,20 @@ def fsc_company_affiliates(
         base_date=base_date,
         page_no=page_no,
         num_of_rows=num_of_rows,
+        api_kind="affiliates",
     )
 
     data = call_fsc_api(FSC_AFFILIATES_URL, params)
     items = extract_public_data_items(data)
-    affiliates = [normalize_fsc_relation_item(item) for item in items]
+    affiliates = [normalize_fsc_affiliate_item(item) for item in items]
 
     return {
         "company_name": company_name,
         "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
         "business_registration_number": normalize_business_number(business_registration_number),
         "base_date": normalize_fsc_base_date(base_date),
+        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
+        "api_result": get_public_data_result(data),
         "count": len(affiliates),
         "affiliates": affiliates,
         "raw": data,
@@ -594,17 +760,20 @@ def fsc_company_subsidiaries(
         base_date=base_date,
         page_no=page_no,
         num_of_rows=num_of_rows,
+        api_kind="subsidiaries",
     )
 
     data = call_fsc_api(FSC_SUBSIDIARIES_URL, params)
     items = extract_public_data_items(data)
-    subsidiaries = [normalize_fsc_relation_item(item) for item in items]
+    subsidiaries = [normalize_fsc_subsidiary_item(item) for item in items]
 
     return {
         "company_name": company_name,
         "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
         "business_registration_number": normalize_business_number(business_registration_number),
         "base_date": normalize_fsc_base_date(base_date),
+        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
+        "api_result": get_public_data_result(data),
         "count": len(subsidiaries),
         "subsidiaries": subsidiaries,
         "raw": data,
@@ -628,6 +797,9 @@ def fsc_company_profile(
     """
     기업개요, 계열회사, 종속기업을 한 번에 조회하는 통합 endpoint.
     Core GPT뿐 아니라 Entity & Risk 전용 GPT에서 사용하기 좋습니다.
+
+    회사명만 입력된 경우 기업개요에서 첫 번째 법인등록번호(crno)를 추출해
+    계열회사/종속기업 조회에 우선 사용합니다.
     """
     require_fsc_lookup_key(company_name, corporate_registration_number, business_registration_number)
 
@@ -640,16 +812,18 @@ def fsc_company_profile(
         num_of_rows=10,
     )
 
+    resolved_crno = normalize_corporate_registration_number(corporate_registration_number) or pick_first_fsc_crno(overview)
+
     affiliates = None
     subsidiaries = None
-    api_status = []
+    api_status = [{"endpoint": "/fsc/company-overview", "status": "ok", "resolved_crno": resolved_crno}]
 
     if include_affiliates:
         if FSC_AFFILIATES_URL:
             try:
                 affiliates = fsc_company_affiliates(
-                    company_name=company_name,
-                    corporate_registration_number=corporate_registration_number,
+                    company_name=None if resolved_crno else company_name,
+                    corporate_registration_number=resolved_crno or corporate_registration_number,
                     business_registration_number=business_registration_number,
                     base_date=base_date,
                     page_no=1,
@@ -665,8 +839,8 @@ def fsc_company_profile(
         if FSC_SUBSIDIARIES_URL:
             try:
                 subsidiaries = fsc_company_subsidiaries(
-                    company_name=company_name,
-                    corporate_registration_number=corporate_registration_number,
+                    company_name=None if resolved_crno else company_name,
+                    corporate_registration_number=resolved_crno or corporate_registration_number,
                     business_registration_number=business_registration_number,
                     base_date=base_date,
                     page_no=1,
@@ -681,6 +855,7 @@ def fsc_company_profile(
     return {
         "company_name": company_name,
         "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
+        "resolved_corporate_registration_number": resolved_crno,
         "business_registration_number": normalize_business_number(business_registration_number),
         "base_date": normalize_fsc_base_date(base_date),
         "overview": overview,
@@ -710,21 +885,22 @@ def fsc_raw(
     """
     api_type_upper = normalize_text(api_type).upper()
     api_map = {
-        "OVERVIEW": FSC_COMPANY_OVERVIEW_URL,
-        "COMPANY_OVERVIEW": FSC_COMPANY_OVERVIEW_URL,
-        "AFFILIATES": FSC_AFFILIATES_URL,
-        "COMPANY_AFFILIATES": FSC_AFFILIATES_URL,
-        "SUBSIDIARIES": FSC_SUBSIDIARIES_URL,
-        "COMPANY_SUBSIDIARIES": FSC_SUBSIDIARIES_URL,
+        "OVERVIEW": (FSC_COMPANY_OVERVIEW_URL, "overview"),
+        "COMPANY_OVERVIEW": (FSC_COMPANY_OVERVIEW_URL, "overview"),
+        "AFFILIATES": (FSC_AFFILIATES_URL, "affiliates"),
+        "COMPANY_AFFILIATES": (FSC_AFFILIATES_URL, "affiliates"),
+        "SUBSIDIARIES": (FSC_SUBSIDIARIES_URL, "subsidiaries"),
+        "COMPANY_SUBSIDIARIES": (FSC_SUBSIDIARIES_URL, "subsidiaries"),
     }
 
-    api_url = api_map.get(api_type_upper)
-    if not api_url:
+    api_entry = api_map.get(api_type_upper)
+    if not api_entry:
         raise HTTPException(
             status_code=400,
             detail="api_type은 OVERVIEW, AFFILIATES, SUBSIDIARIES 중 하나여야 합니다."
         )
 
+    api_url, api_kind = api_entry
     params = build_fsc_query_params(
         company_name=company_name,
         corporate_registration_number=corporate_registration_number,
@@ -732,6 +908,7 @@ def fsc_raw(
         base_date=base_date,
         page_no=page_no,
         num_of_rows=num_of_rows,
+        api_kind=api_kind,
     )
 
     data = call_fsc_api(api_url, params)
@@ -740,6 +917,7 @@ def fsc_raw(
     return {
         "api_type": api_type_upper,
         "params_used": {k: v for k, v in params.items()},
+        "api_result": get_public_data_result(data),
         "item_count": len(items),
         "sample_items": items[:5],
         "raw": data,
