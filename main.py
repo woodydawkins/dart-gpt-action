@@ -13,12 +13,12 @@ from urllib.parse import unquote
 load_dotenv()
 
 app = FastAPI(
-    title="DART·KRX·NTS·LAW Disclosure & Market Research API",
-    version="1.8.0",
+    title="DART·KRX·NTS·LAW·FSC Disclosure & Market Research API",
+    version="1.9.0",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
-        "Korea Law Open API, and NTS Business Registration API. It supports DART-registered companies, including listed and non-listed disclosure companies, "
-        "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, NTS business registration status/validation, legal search/article lookup, "
+        "Korea Law Open API, NTS Business Registration API, and FSC company information APIs. It supports DART-registered companies, including listed and non-listed disclosure companies, "
+        "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, NTS business registration status/validation, FSC company overview/affiliates/subsidiaries lookup, legal search/article lookup, "
         "treaty search/detail lookup, and tax-law research endpoints for cases, appeals, interpretations, administrative rules, attachments, histories, comparisons, terms, and related laws."
     )
 )
@@ -67,6 +67,24 @@ NTS_SERVICE_KEY = os.getenv("NTS_SERVICE_KEY")
 NTS_BUSINESS_STATUS_URL = "https://api.odcloud.kr/api/nts-businessman/v1/status"
 NTS_BUSINESS_VALIDATE_URL = "https://api.odcloud.kr/api/nts-businessman/v1/validate"
 
+# FSC 기업기본정보 API
+# 공공데이터포털: 금융위원회_기업기본정보
+# 실제 operation URL은 공공데이터포털 활용신청 후 제공되는 상세 URL을 Render 환경변수로 설정하세요.
+FSC_SERVICE_KEY = os.getenv("FSC_SERVICE_KEY")
+FSC_COMPANY_OVERVIEW_URL = os.getenv("FSC_COMPANY_OVERVIEW_URL")
+FSC_AFFILIATES_URL = os.getenv("FSC_AFFILIATES_URL")
+FSC_SUBSIDIARIES_URL = os.getenv("FSC_SUBSIDIARIES_URL")
+
+# 금융위 API별 파라미터명이 환경에 따라 다를 수 있어 환경변수로 조정 가능하게 둡니다.
+FSC_PARAM_BASE_DATE = os.getenv("FSC_PARAM_BASE_DATE", "basDt")
+FSC_PARAM_COMPANY_NAME = os.getenv("FSC_PARAM_COMPANY_NAME", "corpNm")
+FSC_PARAM_CORP_REG_NO = os.getenv("FSC_PARAM_CORP_REG_NO", "jurirno")
+FSC_PARAM_BUSINESS_NO = os.getenv("FSC_PARAM_BUSINESS_NO", "bzrno")
+FSC_PARAM_PAGE_NO = os.getenv("FSC_PARAM_PAGE_NO", "pageNo")
+FSC_PARAM_NUM_OF_ROWS = os.getenv("FSC_PARAM_NUM_OF_ROWS", "numOfRows")
+FSC_PARAM_RESULT_TYPE = os.getenv("FSC_PARAM_RESULT_TYPE", "resultType")
+FSC_RESULT_TYPE_VALUE = os.getenv("FSC_RESULT_TYPE_VALUE", "json")
+
 # =========================================================
 # Root / debug
 # =========================================================
@@ -75,12 +93,13 @@ NTS_BUSINESS_VALIDATE_URL = "https://api.odcloud.kr/api/nts-businessman/v1/valid
 def root():
     return {
         "status": "ok",
-        "message": "DART·KRX·LAW Disclosure, Market & Legal Research API is running.",
+        "message": "DART·KRX·LAW·NTS·FSC Disclosure, Market & Legal Research API is running.",
         "scope": {
             "dart": "DART-registered companies, including listed and non-listed disclosure companies.",
             "krx": "KRX market data for KOSPI, KOSDAQ, KONEX, and ETF if API URLs and key are configured.",
             "law": "Korea Law Open API search, article lookup, and treaty lookup if LAW_OC is configured.",
-            "nts": "NTS business registration status and validation lookup if NTS_SERVICE_KEY is configured."
+            "nts": "NTS business registration status and validation lookup if NTS_SERVICE_KEY is configured.",
+            "fsc": "FSC company overview, affiliates, and subsidiaries lookup if FSC_SERVICE_KEY and FSC API URLs are configured."
         },
         "endpoints": {
             "dart": [
@@ -96,6 +115,13 @@ def root():
             "nts": [
                 "/nts/business-status",
                 "/nts/business-validate"
+            ],
+            "fsc": [
+                "/fsc/company-overview",
+                "/fsc/company-affiliates",
+                "/fsc/company-subsidiaries",
+                "/fsc/company-profile",
+                "/fsc/raw"
             ],
             "law": [
                 "/law/search",
@@ -169,6 +195,20 @@ def debug_env():
         "nts_service_key_length": len(NTS_SERVICE_KEY) if NTS_SERVICE_KEY else 0,
         "nts_business_status_url": NTS_BUSINESS_STATUS_URL,
         "nts_business_validate_url": NTS_BUSINESS_VALIDATE_URL,
+
+        "has_fsc_service_key": bool(FSC_SERVICE_KEY),
+        "fsc_service_key_length": len(FSC_SERVICE_KEY) if FSC_SERVICE_KEY else 0,
+        "has_fsc_company_overview_url": bool(FSC_COMPANY_OVERVIEW_URL),
+        "has_fsc_affiliates_url": bool(FSC_AFFILIATES_URL),
+        "has_fsc_subsidiaries_url": bool(FSC_SUBSIDIARIES_URL),
+        "fsc_param_base_date": FSC_PARAM_BASE_DATE,
+        "fsc_param_company_name": FSC_PARAM_COMPANY_NAME,
+        "fsc_param_corp_reg_no": FSC_PARAM_CORP_REG_NO,
+        "fsc_param_business_no": FSC_PARAM_BUSINESS_NO,
+        "fsc_param_page_no": FSC_PARAM_PAGE_NO,
+        "fsc_param_num_of_rows": FSC_PARAM_NUM_OF_ROWS,
+        "fsc_param_result_type": FSC_PARAM_RESULT_TYPE,
+        "fsc_result_type_value": FSC_RESULT_TYPE_VALUE,
     }
 
 
@@ -239,6 +279,471 @@ def date_range_yyyymmdd(start_date: str, end_date: str):
     return dates
 
 
+
+
+
+# =========================================================
+# FSC helpers / endpoints
+# =========================================================
+
+def require_fsc_service_key() -> str:
+    """
+    금융위원회 기업기본정보 API 인증키 확인.
+    Render 환경변수 또는 .env 파일에 FSC_SERVICE_KEY를 설정해야 합니다.
+    """
+    if not FSC_SERVICE_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="FSC_SERVICE_KEY가 설정되어 있지 않습니다. Render 환경변수 또는 .env 파일을 확인하세요."
+        )
+
+    # 공공데이터포털 Encoding 키를 넣은 경우를 대비해 1회 decode합니다.
+    return unquote(FSC_SERVICE_KEY)
+
+
+def normalize_corporate_registration_number(value: Any) -> str:
+    """
+    법인등록번호에서 숫자만 남깁니다.
+    예: 110111-1234567 -> 1101111234567
+    """
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
+def normalize_fsc_base_date(value: Any) -> str:
+    """
+    금융위 API 기준일자 YYYYMMDD 형식 보정.
+    미입력 시 빈 문자열을 반환합니다.
+    """
+    if value is None:
+        return ""
+    return "".join(ch for ch in str(value) if ch.isdigit())
+
+
+def fsc_clean_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in params.items()
+        if value is not None and str(value).strip() != ""
+    }
+
+
+def call_fsc_api(api_url: str, params: dict[str, Any]) -> dict[str, Any]:
+    """
+    금융위원회 기업기본정보 API 공통 호출 함수.
+    """
+    if not api_url:
+        raise HTTPException(
+            status_code=500,
+            detail="FSC API URL이 설정되어 있지 않습니다. Render 환경변수를 확인하세요."
+        )
+
+    clean_params = fsc_clean_params(params)
+    clean_params["serviceKey"] = require_fsc_service_key()
+
+    # 공공데이터포털 JSON 응답 요청 파라미터. API별로 resultType 또는 _type 등을 쓰는 경우가 있어 환경변수로 조정 가능.
+    if FSC_PARAM_RESULT_TYPE:
+        clean_params.setdefault(FSC_PARAM_RESULT_TYPE, FSC_RESULT_TYPE_VALUE)
+
+    try:
+        res = requests.get(api_url, params=clean_params, timeout=30)
+        res.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"FSC API 요청 실패: {str(e)}"
+        )
+
+    try:
+        return res.json()
+    except ValueError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"FSC API 응답이 JSON이 아닙니다. 응답 앞부분: {res.text[:500]}"
+        )
+
+
+def extract_public_data_items(data: Any) -> list[Any]:
+    """
+    공공데이터포털 계열 API의 response.body.items.item 구조와
+    data/list/result 등 여러 응답 구조에서 item 목록을 유연하게 추출합니다.
+    """
+    if isinstance(data, list):
+        return data
+
+    if not isinstance(data, dict):
+        return []
+
+    response = data.get("response")
+    if isinstance(response, dict):
+        body = response.get("body")
+        if isinstance(body, dict):
+            items = body.get("items")
+            if isinstance(items, dict):
+                item = items.get("item")
+                if isinstance(item, list):
+                    return item
+                if isinstance(item, dict):
+                    return [item]
+            if isinstance(items, list):
+                return items
+
+    for key in ["items", "item", "data", "list", "result", "results", "output", "OutBlock_1", "OutBlock"]:
+        value = data.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return [value]
+
+    for value in data.values():
+        if isinstance(value, dict):
+            nested = extract_public_data_items(value)
+            if nested:
+                return nested
+
+    return []
+
+
+def build_fsc_query_params(
+    company_name: Optional[str],
+    corporate_registration_number: Optional[str],
+    business_registration_number: Optional[str],
+    base_date: Optional[str],
+    page_no: int,
+    num_of_rows: int,
+    extra_params: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    params = {
+        FSC_PARAM_PAGE_NO: page_no,
+        FSC_PARAM_NUM_OF_ROWS: num_of_rows,
+        FSC_PARAM_BASE_DATE: normalize_fsc_base_date(base_date),
+        FSC_PARAM_COMPANY_NAME: normalize_text(company_name),
+        FSC_PARAM_CORP_REG_NO: normalize_corporate_registration_number(corporate_registration_number),
+        FSC_PARAM_BUSINESS_NO: normalize_business_number(business_registration_number),
+    }
+
+    if extra_params:
+        params.update(extra_params)
+
+    return fsc_clean_params(params)
+
+
+def normalize_fsc_company_item(item: dict[str, Any]) -> dict[str, Any]:
+    """
+    금융위 기업기본정보 응답의 필드명이 API 버전별로 다를 수 있어
+    주요 후보 필드를 표준화하고 raw를 보존합니다.
+    """
+    if not isinstance(item, dict):
+        return {"raw": item}
+
+    return {
+        "base_date": pick_first(item, "basDt", "baseDate", "기준일자", "기준일"),
+        "company_name": pick_first(item, "corpNm", "corpName", "crpNm", "기업명", "회사명", "법인명"),
+        "corporate_registration_number": pick_first(item, "jurirno", "corpRegNo", "crno", "법인등록번호"),
+        "business_registration_number": pick_first(item, "bzrno", "bizrNo", "brno", "사업자등록번호"),
+        "representative": pick_first(item, "rprsvNm", "reprNm", "ceoNm", "대표자명", "대표자"),
+        "establishment_date": pick_first(item, "estbDt", "fndnDt", "설립일자", "설립일"),
+        "industry": pick_first(item, "indutyNm", "indutyCdNm", "업종명", "업종"),
+        "industry_code": pick_first(item, "indutyCd", "업종코드"),
+        "main_business": pick_first(item, "mainBiz", "mnBiz", "주요사업", "주요영업"),
+        "employee_count": pick_first(item, "empCnt", "employeeCnt", "종업원수"),
+        "listed_status": pick_first(item, "lstgYn", "listedYn", "상장여부"),
+        "market": pick_first(item, "mktNm", "market", "시장구분"),
+        "raw": item,
+    }
+
+
+def normalize_fsc_relation_item(item: dict[str, Any]) -> dict[str, Any]:
+    """
+    계열회사/종속기업 계열 응답을 느슨하게 정규화합니다.
+    """
+    if not isinstance(item, dict):
+        return {"raw": item}
+
+    return {
+        "base_date": pick_first(item, "basDt", "baseDate", "기준일자", "기준일"),
+        "parent_company_name": pick_first(item, "corpNm", "parentCorpNm", "지배회사명", "회사명"),
+        "company_name": pick_first(item, "aflCoNm", "subsidiaryNm", "invstCoNm", "relCoNm", "기업명", "계열회사명", "종속기업명"),
+        "corporate_registration_number": pick_first(item, "jurirno", "corpRegNo", "crno", "법인등록번호"),
+        "business_registration_number": pick_first(item, "bzrno", "bizrNo", "brno", "사업자등록번호"),
+        "representative": pick_first(item, "rprsvNm", "reprNm", "ceoNm", "대표자명", "대표자"),
+        "establishment_date": pick_first(item, "estbDt", "fndnDt", "설립일자", "설립일"),
+        "listed_status": pick_first(item, "lstgYn", "listedYn", "상장여부"),
+        "ownership_percentage": pick_first(item, "holdRto", "ownRatio", "지분율", "소유비율"),
+        "relationship_type": pick_first(item, "relType", "관계구분", "계열구분", "종속구분"),
+        "raw": item,
+    }
+
+
+def require_fsc_lookup_key(
+    company_name: Optional[str],
+    corporate_registration_number: Optional[str],
+    business_registration_number: Optional[str],
+) -> None:
+    if not company_name and not corporate_registration_number and not business_registration_number:
+        raise HTTPException(
+            status_code=400,
+            detail="company_name, corporate_registration_number, business_registration_number 중 하나는 필요합니다."
+        )
+
+
+@app.get("/fsc/company-overview")
+def fsc_company_overview(
+    company_name: Optional[str] = Query(None, description="기업명. 예: 삼성전자"),
+    corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
+    business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
+    base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    page_no: int = Query(1, ge=1, description="페이지 번호"),
+    num_of_rows: int = Query(10, ge=1, le=100, description="한 페이지 결과 수")
+):
+    """
+    금융위원회 기업기본정보 중 기업개요 조회.
+    회사명, 법인등록번호 또는 사업자등록번호 기준으로 기업 기본정보를 확인합니다.
+    """
+    require_fsc_lookup_key(company_name, corporate_registration_number, business_registration_number)
+
+    params = build_fsc_query_params(
+        company_name=company_name,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        base_date=base_date,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
+    )
+
+    data = call_fsc_api(FSC_COMPANY_OVERVIEW_URL, params)
+    items = extract_public_data_items(data)
+    companies = [normalize_fsc_company_item(item) for item in items]
+
+    return {
+        "company_name": company_name,
+        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
+        "business_registration_number": normalize_business_number(business_registration_number),
+        "base_date": normalize_fsc_base_date(base_date),
+        "count": len(companies),
+        "companies": companies,
+        "raw": data,
+        "note": (
+            "금융위원회 기업기본정보 API 결과입니다. 실시간 데이터가 아니므로 중요 판단 시 DART 원문, "
+            "등기사항증명서, 감사보고서 등 원천자료 확인이 필요합니다."
+        ),
+    }
+
+
+@app.get("/fsc/company-affiliates")
+def fsc_company_affiliates(
+    company_name: Optional[str] = Query(None, description="기업명. 예: 삼성전자"),
+    corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
+    business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
+    base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    page_no: int = Query(1, ge=1, description="페이지 번호"),
+    num_of_rows: int = Query(20, ge=1, le=100, description="한 페이지 결과 수")
+):
+    """
+    금융위원회 기업기본정보 중 계열회사 현황 조회.
+    """
+    require_fsc_lookup_key(company_name, corporate_registration_number, business_registration_number)
+
+    params = build_fsc_query_params(
+        company_name=company_name,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        base_date=base_date,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
+    )
+
+    data = call_fsc_api(FSC_AFFILIATES_URL, params)
+    items = extract_public_data_items(data)
+    affiliates = [normalize_fsc_relation_item(item) for item in items]
+
+    return {
+        "company_name": company_name,
+        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
+        "business_registration_number": normalize_business_number(business_registration_number),
+        "base_date": normalize_fsc_base_date(base_date),
+        "count": len(affiliates),
+        "affiliates": affiliates,
+        "raw": data,
+        "note": (
+            "금융위원회 기업기본정보 API의 계열회사 현황입니다. 특수관계자 검토 시 DART 공시, "
+            "공정위 기업집단 자료, 회사 제공 특수관계자 리스트와 대조하세요."
+        ),
+    }
+
+
+@app.get("/fsc/company-subsidiaries")
+def fsc_company_subsidiaries(
+    company_name: Optional[str] = Query(None, description="기업명. 예: 삼성전자"),
+    corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
+    business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
+    base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    page_no: int = Query(1, ge=1, description="페이지 번호"),
+    num_of_rows: int = Query(20, ge=1, le=100, description="한 페이지 결과 수")
+):
+    """
+    금융위원회 기업기본정보 중 연결대상 종속기업 조회.
+    """
+    require_fsc_lookup_key(company_name, corporate_registration_number, business_registration_number)
+
+    params = build_fsc_query_params(
+        company_name=company_name,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        base_date=base_date,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
+    )
+
+    data = call_fsc_api(FSC_SUBSIDIARIES_URL, params)
+    items = extract_public_data_items(data)
+    subsidiaries = [normalize_fsc_relation_item(item) for item in items]
+
+    return {
+        "company_name": company_name,
+        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
+        "business_registration_number": normalize_business_number(business_registration_number),
+        "base_date": normalize_fsc_base_date(base_date),
+        "count": len(subsidiaries),
+        "subsidiaries": subsidiaries,
+        "raw": data,
+        "note": (
+            "금융위원회 기업기본정보 API의 연결대상 종속기업 정보입니다. 최종 연결범위 판단은 "
+            "사업보고서 연결재무제표 주석, 지배력 판단 근거, 감사보고서 원문 확인이 필요합니다."
+        ),
+    }
+
+
+@app.get("/fsc/company-profile")
+def fsc_company_profile(
+    company_name: Optional[str] = Query(None, description="기업명. 예: 삼성전자"),
+    corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
+    business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
+    base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    include_affiliates: bool = Query(True, description="계열회사 현황 포함 여부"),
+    include_subsidiaries: bool = Query(True, description="연결대상 종속기업 포함 여부"),
+    num_of_rows: int = Query(20, ge=1, le=100, description="계열/종속기업 최대 조회 건수")
+):
+    """
+    기업개요, 계열회사, 종속기업을 한 번에 조회하는 통합 endpoint.
+    Core GPT뿐 아니라 Entity & Risk 전용 GPT에서 사용하기 좋습니다.
+    """
+    require_fsc_lookup_key(company_name, corporate_registration_number, business_registration_number)
+
+    overview = fsc_company_overview(
+        company_name=company_name,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        base_date=base_date,
+        page_no=1,
+        num_of_rows=10,
+    )
+
+    affiliates = None
+    subsidiaries = None
+    api_status = []
+
+    if include_affiliates:
+        if FSC_AFFILIATES_URL:
+            try:
+                affiliates = fsc_company_affiliates(
+                    company_name=company_name,
+                    corporate_registration_number=corporate_registration_number,
+                    business_registration_number=business_registration_number,
+                    base_date=base_date,
+                    page_no=1,
+                    num_of_rows=num_of_rows,
+                )
+                api_status.append({"endpoint": "/fsc/company-affiliates", "status": "ok"})
+            except HTTPException as e:
+                api_status.append({"endpoint": "/fsc/company-affiliates", "status": "error", "detail": e.detail})
+        else:
+            api_status.append({"endpoint": "/fsc/company-affiliates", "status": "skipped", "reason": "FSC_AFFILIATES_URL is not configured"})
+
+    if include_subsidiaries:
+        if FSC_SUBSIDIARIES_URL:
+            try:
+                subsidiaries = fsc_company_subsidiaries(
+                    company_name=company_name,
+                    corporate_registration_number=corporate_registration_number,
+                    business_registration_number=business_registration_number,
+                    base_date=base_date,
+                    page_no=1,
+                    num_of_rows=num_of_rows,
+                )
+                api_status.append({"endpoint": "/fsc/company-subsidiaries", "status": "ok"})
+            except HTTPException as e:
+                api_status.append({"endpoint": "/fsc/company-subsidiaries", "status": "error", "detail": e.detail})
+        else:
+            api_status.append({"endpoint": "/fsc/company-subsidiaries", "status": "skipped", "reason": "FSC_SUBSIDIARIES_URL is not configured"})
+
+    return {
+        "company_name": company_name,
+        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
+        "business_registration_number": normalize_business_number(business_registration_number),
+        "base_date": normalize_fsc_base_date(base_date),
+        "overview": overview,
+        "affiliates": affiliates,
+        "subsidiaries": subsidiaries,
+        "api_status": api_status,
+        "note": (
+            "금융위원회 기업기본정보 통합 조회 결과입니다. 계열회사와 연결대상 종속기업 정보는 "
+            "감사/FDD/특수관계자 검토의 1차 스크리닝 자료로 사용하고, 최종 판단은 원천자료로 확인하세요."
+        ),
+    }
+
+
+@app.get("/fsc/raw")
+def fsc_raw(
+    api_type: str = Query(..., description="API 유형: OVERVIEW, AFFILIATES, SUBSIDIARIES"),
+    company_name: Optional[str] = Query(None, description="기업명. 예: 삼성전자"),
+    corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
+    business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
+    base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    page_no: int = Query(1, ge=1),
+    num_of_rows: int = Query(5, ge=1, le=100)
+):
+    """
+    금융위 API 응답 구조 확인용 원시 응답 endpoint.
+    GPT 스키마에는 일반적으로 넣지 않아도 됩니다.
+    """
+    api_type_upper = normalize_text(api_type).upper()
+    api_map = {
+        "OVERVIEW": FSC_COMPANY_OVERVIEW_URL,
+        "COMPANY_OVERVIEW": FSC_COMPANY_OVERVIEW_URL,
+        "AFFILIATES": FSC_AFFILIATES_URL,
+        "COMPANY_AFFILIATES": FSC_AFFILIATES_URL,
+        "SUBSIDIARIES": FSC_SUBSIDIARIES_URL,
+        "COMPANY_SUBSIDIARIES": FSC_SUBSIDIARIES_URL,
+    }
+
+    api_url = api_map.get(api_type_upper)
+    if not api_url:
+        raise HTTPException(
+            status_code=400,
+            detail="api_type은 OVERVIEW, AFFILIATES, SUBSIDIARIES 중 하나여야 합니다."
+        )
+
+    params = build_fsc_query_params(
+        company_name=company_name,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        base_date=base_date,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
+    )
+
+    data = call_fsc_api(api_url, params)
+    items = extract_public_data_items(data)
+
+    return {
+        "api_type": api_type_upper,
+        "params_used": {k: v for k, v in params.items()},
+        "item_count": len(items),
+        "sample_items": items[:5],
+        "raw": data,
+    }
 
 
 # =========================================================
