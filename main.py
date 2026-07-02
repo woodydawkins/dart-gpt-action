@@ -13,13 +13,13 @@ from urllib.parse import unquote
 load_dotenv()
 
 app = FastAPI(
-    title="DART·KRX·NTS·LAW·FSC·REB Disclosure & Market Research API",
-    version="1.10.0",
+    title="DART·KRX·NTS·LAW·FSC·FSC_FIN·REB·BOK·NTS_ASSET_VALUE Disclosure & Market Research API",
+    version="1.13.0",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
         "Korea Law Open API, NTS Business Registration API, and FSC company information APIs. It supports DART-registered companies, including listed and non-listed disclosure companies, "
         "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, NTS business registration status/validation, FSC company overview/affiliates/subsidiaries lookup, legal search/article lookup, "
-        "treaty search/detail lookup, tax-law research endpoints for cases, appeals, interpretations, administrative rules, attachments, histories, comparisons, terms, and related laws, and Korea Real Estate Board R-ONE statistics lookup."
+        "treaty search/detail lookup, tax-law research endpoints for cases, appeals, interpretations, administrative rules, attachments, histories, comparisons, terms, and related laws, Korea Real Estate Board R-ONE statistics lookup, and Bank of Korea ECOS economic statistics lookup, and NTS commercial building/officetel standard value lookup."
     )
 )
 
@@ -67,6 +67,18 @@ NTS_SERVICE_KEY = os.getenv("NTS_SERVICE_KEY")
 NTS_BUSINESS_STATUS_URL = "https://api.odcloud.kr/api/nts-businessman/v1/status"
 NTS_BUSINESS_VALIDATE_URL = "https://api.odcloud.kr/api/nts-businessman/v1/validate"
 
+
+# NTS 기준시가 API: 상업용건물/오피스텔 기준시가
+# 공공데이터포털 ODCloud: 국세청_상업용건물/오피스텔 기준시가
+# Swagger host/basePath: https://api.odcloud.kr/api
+# 실제 데이터는 연도별 UDDI endpoint로 나뉘므로, Base URL + 코드상 endpoint 매핑으로 호출합니다.
+NTS_ASSET_VALUE_SERVICE_KEY = os.getenv("NTS_ASSET_VALUE_SERVICE_KEY") or NTS_SERVICE_KEY
+NTS_ASSET_VALUE_BASE_URL = os.getenv(
+    "NTS_ASSET_VALUE_BASE_URL",
+    "https://api.odcloud.kr/api",
+).rstrip("/")
+NTS_ASSET_VALUE_RESPONSE_TYPE = os.getenv("NTS_ASSET_VALUE_RESPONSE_TYPE", "json")
+
 # FSC 기업기본정보 API
 # 공공데이터포털: 금융위원회_기업기본정보
 # 활용가이드 기준 service URL: https://apis.data.go.kr/1160100/service/GetCorpBasicInfoService_V2
@@ -101,6 +113,35 @@ FSC_PARAM_NUM_OF_ROWS = os.getenv("FSC_PARAM_NUM_OF_ROWS", "numOfRows")
 FSC_PARAM_RESULT_TYPE = os.getenv("FSC_PARAM_RESULT_TYPE", "resultType")
 FSC_RESULT_TYPE_VALUE = os.getenv("FSC_RESULT_TYPE_VALUE", "json")
 
+# FSC 기업 재무정보 API
+# 공공데이터포털: 금융위원회_기업 재무정보
+# End Point: https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2
+# 상세기능명:
+# - getSummFinaStat_V2: 요약재무제표조회
+# - getBs_V2: 재무상태표조회
+# - getIncoStat_V2: 손익계산서조회
+FSC_FIN_SERVICE_KEY = os.getenv("FSC_FIN_SERVICE_KEY") or FSC_SERVICE_KEY
+FSC_FIN_BASE_SERVICE_URL = os.getenv(
+    "FSC_FIN_BASE_SERVICE_URL",
+    "https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2",
+).rstrip("/")
+FSC_FIN_SUMMARY_URL = os.getenv(
+    "FSC_FIN_SUMMARY_URL",
+    f"{FSC_FIN_BASE_SERVICE_URL}/getSummFinaStat_V2",
+)
+FSC_FIN_BALANCE_SHEET_URL = os.getenv(
+    "FSC_FIN_BALANCE_SHEET_URL",
+    f"{FSC_FIN_BASE_SERVICE_URL}/getBs_V2",
+)
+FSC_FIN_INCOME_STATEMENT_URL = os.getenv(
+    "FSC_FIN_INCOME_STATEMENT_URL",
+    f"{FSC_FIN_BASE_SERVICE_URL}/getIncoStat_V2",
+)
+FSC_FIN_PARAM_PAGE_NO = os.getenv("FSC_FIN_PARAM_PAGE_NO", "pageNo")
+FSC_FIN_PARAM_NUM_OF_ROWS = os.getenv("FSC_FIN_PARAM_NUM_OF_ROWS", "numOfRows")
+FSC_FIN_PARAM_RESULT_TYPE = os.getenv("FSC_FIN_PARAM_RESULT_TYPE", "resultType")
+FSC_FIN_RESULT_TYPE_VALUE = os.getenv("FSC_FIN_RESULT_TYPE_VALUE", "json")
+
 # 한국부동산원 R-ONE 부동산통계 Open API
 # R-ONE Open API 명세 기준:
 # - 서비스 통계목록: https://www.reb.or.kr/r-one/openapi/SttsApiTbl.do
@@ -124,6 +165,16 @@ REB_STAT_DATA_URL = os.getenv(
     "https://www.reb.or.kr/r-one/openapi/SttsApiTblData.do",
 )
 
+# 한국은행 ECOS Open API
+# ECOS API URL 구조:
+# https://ecos.bok.or.kr/api/{서비스명}/{인증키}/{요청형식}/{언어}/{시작건수}/{종료건수}/...
+BOK_API_KEY = os.getenv("BOK_API_KEY")
+BOK_API_BASE_URL = os.getenv("BOK_API_BASE_URL", "https://ecos.bok.or.kr/api").rstrip("/")
+BOK_DEFAULT_LANG = os.getenv("BOK_DEFAULT_LANG", "kr")
+BOK_DEFAULT_FORMAT = os.getenv("BOK_DEFAULT_FORMAT", "json")
+BOK_DEFAULT_START = int(os.getenv("BOK_DEFAULT_START", "1"))
+BOK_DEFAULT_END = int(os.getenv("BOK_DEFAULT_END", "100"))
+
 # =========================================================
 # Root / debug
 # =========================================================
@@ -132,14 +183,17 @@ REB_STAT_DATA_URL = os.getenv(
 def root():
     return {
         "status": "ok",
-        "message": "DART·KRX·LAW·NTS·FSC·REB Disclosure, Market & Legal Research API is running.",
+        "message": "DART·KRX·LAW·NTS·FSC·REB·BOK Disclosure, Market & Legal Research API is running.",
         "scope": {
             "dart": "DART-registered companies, including listed and non-listed disclosure companies.",
             "krx": "KRX market data for KOSPI, KOSDAQ, KONEX, and ETF if API URLs and key are configured.",
             "law": "Korea Law Open API search, article lookup, and treaty lookup if LAW_OC is configured.",
             "nts": "NTS business registration status and validation lookup if NTS_SERVICE_KEY is configured.",
+            "nts_asset_value": "NTS commercial building/officetel standard value lookup if NTS_ASSET_VALUE_SERVICE_KEY or NTS_SERVICE_KEY is configured.",
             "fsc": "FSC company overview, affiliates, and subsidiaries lookup if FSC_SERVICE_KEY and FSC API URLs are configured.",
-            "real_estate": "Korea Real Estate Board R-ONE statistics lookup if REB_API_KEY is configured."
+            "fsc_financial": "FSC company financial statement data lookup if FSC_FIN_SERVICE_KEY or FSC_SERVICE_KEY is configured.",
+            "real_estate": "Korea Real Estate Board R-ONE statistics lookup if REB_API_KEY is configured.",
+            "bok": "Bank of Korea ECOS economic statistics lookup if BOK_API_KEY is configured."
         },
         "endpoints": {
             "dart": [
@@ -156,6 +210,12 @@ def root():
                 "/nts/business-status",
                 "/nts/business-validate"
             ],
+            "nts_asset_value": [
+                "/nts/asset-value/endpoints",
+                "/nts/asset-value/standard-value",
+                "/nts/asset-value/classification-codes",
+                "/nts/asset-value/raw"
+            ],
             "fsc": [
                 "/fsc/company-overview",
                 "/fsc/company-affiliates",
@@ -163,11 +223,25 @@ def root():
                 "/fsc/company-profile",
                 "/fsc/raw"
             ],
+            "fsc_financial": [
+                "/fsc/financial/summary",
+                "/fsc/financial/balance-sheet",
+                "/fsc/financial/income-statement",
+                "/fsc/financial/raw"
+            ],
             "real_estate": [
                 "/real-estate/reb/tables",
                 "/real-estate/reb/items",
                 "/real-estate/reb/data",
                 "/real-estate/reb/raw"
+            ],
+            "bok": [
+                "/bok/statistics/tables",
+                "/bok/statistics/items",
+                "/bok/statistics/search",
+                "/bok/statistics/top100",
+                "/bok/statistics/metadata",
+                "/bok/statistics/raw"
             ],
             "law": [
                 "/law/search",
@@ -242,6 +316,12 @@ def debug_env():
         "nts_business_status_url": NTS_BUSINESS_STATUS_URL,
         "nts_business_validate_url": NTS_BUSINESS_VALIDATE_URL,
 
+        "has_nts_asset_value_service_key": bool(NTS_ASSET_VALUE_SERVICE_KEY),
+        "nts_asset_value_service_key_length": len(NTS_ASSET_VALUE_SERVICE_KEY) if NTS_ASSET_VALUE_SERVICE_KEY else 0,
+        "nts_asset_value_base_url": NTS_ASSET_VALUE_BASE_URL,
+        "nts_asset_value_response_type": NTS_ASSET_VALUE_RESPONSE_TYPE,
+        "nts_asset_value_available_years": sorted(NTS_ASSET_VALUE_ENDPOINTS.keys()) if "NTS_ASSET_VALUE_ENDPOINTS" in globals() else [],
+
         "has_fsc_service_key": bool(FSC_SERVICE_KEY),
         "fsc_service_key_length": len(FSC_SERVICE_KEY) if FSC_SERVICE_KEY else 0,
         "has_fsc_company_overview_url": bool(FSC_COMPANY_OVERVIEW_URL),
@@ -256,6 +336,17 @@ def debug_env():
         "fsc_param_result_type": FSC_PARAM_RESULT_TYPE,
         "fsc_result_type_value": FSC_RESULT_TYPE_VALUE,
 
+        "has_fsc_fin_service_key": bool(FSC_FIN_SERVICE_KEY),
+        "fsc_fin_service_key_length": len(FSC_FIN_SERVICE_KEY) if FSC_FIN_SERVICE_KEY else 0,
+        "fsc_fin_base_service_url": FSC_FIN_BASE_SERVICE_URL,
+        "has_fsc_fin_summary_url": bool(FSC_FIN_SUMMARY_URL),
+        "has_fsc_fin_balance_sheet_url": bool(FSC_FIN_BALANCE_SHEET_URL),
+        "has_fsc_fin_income_statement_url": bool(FSC_FIN_INCOME_STATEMENT_URL),
+        "fsc_fin_param_page_no": FSC_FIN_PARAM_PAGE_NO,
+        "fsc_fin_param_num_of_rows": FSC_FIN_PARAM_NUM_OF_ROWS,
+        "fsc_fin_param_result_type": FSC_FIN_PARAM_RESULT_TYPE,
+        "fsc_fin_result_type_value": FSC_FIN_RESULT_TYPE_VALUE,
+
         "has_reb_api_key": bool(REB_API_KEY),
         "reb_api_key_length": len(REB_API_KEY) if REB_API_KEY else 0,
         "reb_auth_param_name": REB_AUTH_PARAM_NAME,
@@ -263,6 +354,14 @@ def debug_env():
         "reb_stat_table_list_url": REB_STAT_TABLE_LIST_URL,
         "reb_stat_item_list_url": REB_STAT_ITEM_LIST_URL,
         "reb_stat_data_url": REB_STAT_DATA_URL,
+
+        "has_bok_api_key": bool(BOK_API_KEY),
+        "bok_api_key_length": len(BOK_API_KEY) if BOK_API_KEY else 0,
+        "bok_api_base_url": BOK_API_BASE_URL,
+        "bok_default_lang": BOK_DEFAULT_LANG,
+        "bok_default_format": BOK_DEFAULT_FORMAT,
+        "bok_default_start": BOK_DEFAULT_START,
+        "bok_default_end": BOK_DEFAULT_END,
     }
 
 
@@ -580,6 +679,419 @@ def reb_raw(
     return {
         "api_type": api_type_upper,
         **call_reb_api(api_url, params=params, response_type=response_type),
+    }
+
+
+
+
+
+# =========================================================
+# BOK / Bank of Korea ECOS helpers / endpoints
+# =========================================================
+
+def require_bok_api_key() -> str:
+    """
+    한국은행 ECOS Open API 인증키 확인.
+    Render 환경변수 또는 .env 파일에 BOK_API_KEY를 설정해야 합니다.
+    """
+    if not BOK_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="BOK_API_KEY가 설정되어 있지 않습니다. Render 환경변수 또는 .env 파일을 확인하세요."
+        )
+    return BOK_API_KEY
+
+
+def parse_bok_response(res: requests.Response, response_format: str):
+    """
+    한국은행 ECOS API 응답 파싱.
+    기본은 JSON이며, XML/text 응답도 fallback으로 반환합니다.
+    """
+    fmt = normalize_text(response_format).lower()
+
+    if fmt == "json":
+        try:
+            return res.json()
+        except ValueError:
+            pass
+
+    try:
+        root = ET.fromstring(res.content)
+        return {root.tag: xml_element_to_dict(root)}
+    except ET.ParseError:
+        return {
+            "content_type": res.headers.get("content-type"),
+            "text": res.text[:5000],
+            "note": "한국은행 ECOS API 응답이 JSON/XML로 파싱되지 않았습니다. BOK_DEFAULT_FORMAT, 서비스명, 통계코드, 항목코드를 확인하세요."
+        }
+
+
+def build_bok_url(
+    service_name: str,
+    path_parts: list[Any],
+    response_format: Optional[str] = None,
+    language: Optional[str] = None,
+) -> str:
+    """
+    ECOS URL 생성.
+    구조: {base}/{service}/{key}/{format}/{lang}/{path_parts...}
+    """
+    api_key = require_bok_api_key()
+    fmt = normalize_text(response_format or BOK_DEFAULT_FORMAT or "json")
+    lang = normalize_text(language or BOK_DEFAULT_LANG or "kr")
+    service = normalize_text(service_name)
+
+    if not service:
+        raise HTTPException(status_code=400, detail="service_name은 필수입니다.")
+
+    clean_parts = [
+        str(part).strip()
+        for part in path_parts
+        if part is not None and str(part).strip() != ""
+    ]
+
+    return "/".join([BOK_API_BASE_URL, service, api_key, fmt, lang, *clean_parts])
+
+
+def call_bok_api(
+    service_name: str,
+    path_parts: list[Any],
+    response_format: Optional[str] = None,
+    language: Optional[str] = None,
+):
+    """
+    한국은행 ECOS Open API 공통 호출 함수.
+    """
+    fmt = normalize_text(response_format or BOK_DEFAULT_FORMAT or "json")
+    url = build_bok_url(
+        service_name=service_name,
+        path_parts=path_parts,
+        response_format=fmt,
+        language=language,
+    )
+
+    try:
+        res = requests.get(url, timeout=30)
+        res.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"한국은행 ECOS API 요청 실패: {str(e)}"
+        )
+
+    return {
+        "request_url_masked": url.replace(require_bok_api_key(), "***"),
+        "service_name": service_name,
+        "response_format": fmt,
+        "language": normalize_text(language or BOK_DEFAULT_LANG or "kr"),
+        "data": parse_bok_response(res, fmt),
+    }
+
+
+def find_bok_first_root(data: Any) -> tuple[str, Any]:
+    """
+    ECOS JSON 응답은 보통 {서비스명: {...}} 구조입니다.
+    첫 번째 루트 key/value를 반환합니다.
+    """
+    if isinstance(data, dict) and data:
+        first_key = next(iter(data.keys()))
+        return first_key, data.get(first_key)
+    return "", data
+
+
+def extract_bok_rows(data: Any) -> list[Any]:
+    """
+    ECOS 응답에서 row 목록을 유연하게 추출합니다.
+    """
+    if isinstance(data, list):
+        return data
+
+    if not isinstance(data, dict):
+        return []
+
+    root_key, root_value = find_bok_first_root(data)
+
+    if isinstance(root_value, dict):
+        row = root_value.get("row")
+        if isinstance(row, list):
+            return row
+        if isinstance(row, dict):
+            return [row]
+
+    for key in ["row", "items", "item", "data", "list", "result", "results"]:
+        value = data.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return [value]
+
+    for value in data.values():
+        if isinstance(value, dict):
+            nested = extract_bok_rows(value)
+            if nested:
+                return nested
+
+    return []
+
+
+def filter_bok_rows_by_query(rows: list[Any], query: Optional[str]) -> list[Any]:
+    """
+    통계표 목록 등 ECOS row에서 간단한 문자열 필터링을 수행합니다.
+    ECOS API 자체의 검색 파라미터가 없는 경우 서버에서 보조 필터링합니다.
+    """
+    q = normalize_text(query).lower()
+    if not q:
+        return rows
+
+    filtered = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        haystack = " ".join(str(v) for v in row.values() if v is not None).lower()
+        if q in haystack:
+            filtered.append(row)
+
+    return filtered
+
+
+@app.get("/bok/statistics/tables")
+def bok_statistic_tables(
+    query: Optional[str] = Query(None, description="통계표명/코드 검색어. 예: 환율, 금리, 물가"),
+    stat_code: Optional[str] = Query(None, description="통계표코드. 선택값"),
+    start: int = Query(1, ge=1, description="시작건수"),
+    end: int = Query(100, ge=1, le=10000, description="종료건수"),
+    language: Optional[str] = Query(None, description="언어. kr 또는 en. 미입력 시 BOK_DEFAULT_LANG 사용"),
+    response_format: Optional[str] = Query(None, description="응답 형식. json 또는 xml. 미입력 시 BOK_DEFAULT_FORMAT 사용")
+):
+    """
+    한국은행 ECOS 통계표 목록 조회.
+    내부적으로 StatisticTableList를 호출합니다.
+    """
+    path_parts = [start, end]
+    if stat_code:
+        path_parts.append(stat_code)
+
+    result = call_bok_api(
+        service_name="StatisticTableList",
+        path_parts=path_parts,
+        response_format=response_format,
+        language=language,
+    )
+
+    rows = extract_bok_rows(result.get("data"))
+    filtered_rows = filter_bok_rows_by_query(rows, query)
+
+    return {
+        "api": "Bank of Korea ECOS",
+        "endpoint": "/bok/statistics/tables",
+        "service": "StatisticTableList",
+        "query": query,
+        "stat_code": stat_code,
+        "start": start,
+        "end": end,
+        "row_count": len(rows),
+        "filtered_count": len(filtered_rows),
+        "filtered_rows": filtered_rows[: min(len(filtered_rows), 200)],
+        **result,
+        "note": "통계표코드와 통계표명 검색용입니다. query는 API 응답 row에 대해 서버에서 보조 필터링합니다."
+    }
+
+
+@app.get("/bok/statistics/items")
+def bok_statistic_items(
+    stat_code: str = Query(..., description="통계표코드. 예: 731Y001"),
+    start: int = Query(1, ge=1, description="시작건수"),
+    end: int = Query(100, ge=1, le=10000, description="종료건수"),
+    language: Optional[str] = Query(None, description="언어. kr 또는 en. 미입력 시 BOK_DEFAULT_LANG 사용"),
+    response_format: Optional[str] = Query(None, description="응답 형식. json 또는 xml. 미입력 시 BOK_DEFAULT_FORMAT 사용")
+):
+    """
+    한국은행 ECOS 통계 세부항목 목록 조회.
+    내부적으로 StatisticItemList를 호출합니다.
+    """
+    result = call_bok_api(
+        service_name="StatisticItemList",
+        path_parts=[start, end, stat_code],
+        response_format=response_format,
+        language=language,
+    )
+
+    rows = extract_bok_rows(result.get("data"))
+
+    return {
+        "api": "Bank of Korea ECOS",
+        "endpoint": "/bok/statistics/items",
+        "service": "StatisticItemList",
+        "stat_code": stat_code,
+        "start": start,
+        "end": end,
+        "row_count": len(rows),
+        "rows": rows[: min(len(rows), 500)],
+        **result,
+        "note": "통계자료 조회에 필요한 ITEM_CODE1~ITEM_CODE4를 확인하는 용도입니다."
+    }
+
+
+@app.get("/bok/statistics/search")
+def bok_statistic_search(
+    stat_code: str = Query(..., description="통계표코드. 예: 731Y001"),
+    period: str = Query(..., description="주기. A=년, S=반년, Q=분기, M=월, SM=반월, D=일"),
+    start_time: str = Query(..., description="시작시점. 예: 202401 또는 20240101"),
+    end_time: str = Query(..., description="종료시점. 예: 202412 또는 20241231"),
+    item_code1: Optional[str] = Query(None, description="통계항목코드1"),
+    item_code2: Optional[str] = Query(None, description="통계항목코드2"),
+    item_code3: Optional[str] = Query(None, description="통계항목코드3"),
+    item_code4: Optional[str] = Query(None, description="통계항목코드4"),
+    start: int = Query(1, ge=1, description="시작건수"),
+    end: int = Query(1000, ge=1, le=10000, description="종료건수"),
+    language: Optional[str] = Query(None, description="언어. kr 또는 en. 미입력 시 BOK_DEFAULT_LANG 사용"),
+    response_format: Optional[str] = Query(None, description="응답 형식. json 또는 xml. 미입력 시 BOK_DEFAULT_FORMAT 사용")
+):
+    """
+    한국은행 ECOS 통계자료 조회.
+    내부적으로 StatisticSearch를 호출합니다.
+    """
+    path_parts = [
+        start,
+        end,
+        stat_code,
+        normalize_text(period).upper(),
+        start_time,
+        end_time,
+        item_code1,
+        item_code2,
+        item_code3,
+        item_code4,
+    ]
+
+    result = call_bok_api(
+        service_name="StatisticSearch",
+        path_parts=path_parts,
+        response_format=response_format,
+        language=language,
+    )
+
+    rows = extract_bok_rows(result.get("data"))
+
+    return {
+        "api": "Bank of Korea ECOS",
+        "endpoint": "/bok/statistics/search",
+        "service": "StatisticSearch",
+        "stat_code": stat_code,
+        "period": normalize_text(period).upper(),
+        "start_time": start_time,
+        "end_time": end_time,
+        "item_codes": [item_code1, item_code2, item_code3, item_code4],
+        "start": start,
+        "end": end,
+        "row_count": len(rows),
+        "rows": rows,
+        **result,
+        "note": (
+            "한국은행 ECOS 통계조회 결과입니다. 통계표코드와 항목코드는 "
+            "/bok/statistics/tables 및 /bok/statistics/items로 먼저 확인하세요."
+        )
+    }
+
+
+@app.get("/bok/statistics/top100")
+def bok_key_statistics(
+    start: int = Query(1, ge=1, description="시작건수"),
+    end: int = Query(100, ge=1, le=1000, description="종료건수"),
+    language: Optional[str] = Query(None, description="언어. kr 또는 en. 미입력 시 BOK_DEFAULT_LANG 사용"),
+    response_format: Optional[str] = Query(None, description="응답 형식. json 또는 xml. 미입력 시 BOK_DEFAULT_FORMAT 사용")
+):
+    """
+    한국은행 ECOS 100대 통계지표 조회.
+    내부적으로 KeyStatisticList를 호출합니다.
+    """
+    result = call_bok_api(
+        service_name="KeyStatisticList",
+        path_parts=[start, end],
+        response_format=response_format,
+        language=language,
+    )
+
+    rows = extract_bok_rows(result.get("data"))
+
+    return {
+        "api": "Bank of Korea ECOS",
+        "endpoint": "/bok/statistics/top100",
+        "service": "KeyStatisticList",
+        "start": start,
+        "end": end,
+        "row_count": len(rows),
+        "rows": rows,
+        **result,
+    }
+
+
+@app.get("/bok/statistics/metadata")
+def bok_statistic_metadata(
+    stat_code: str = Query(..., description="통계표코드"),
+    start: int = Query(1, ge=1, description="시작건수"),
+    end: int = Query(100, ge=1, le=1000, description="종료건수"),
+    service_name: str = Query("StatisticMeta", description="ECOS 메타데이터 서비스명. 필요 시 조정"),
+    language: Optional[str] = Query(None, description="언어. kr 또는 en. 미입력 시 BOK_DEFAULT_LANG 사용"),
+    response_format: Optional[str] = Query(None, description="응답 형식. json 또는 xml. 미입력 시 BOK_DEFAULT_FORMAT 사용")
+):
+    """
+    한국은행 ECOS 통계 메타데이터 조회.
+    ECOS 서비스명은 운영 중 API 응답에 맞춰 service_name으로 조정할 수 있습니다.
+    """
+    result = call_bok_api(
+        service_name=service_name,
+        path_parts=[start, end, stat_code],
+        response_format=response_format,
+        language=language,
+    )
+
+    rows = extract_bok_rows(result.get("data"))
+
+    return {
+        "api": "Bank of Korea ECOS",
+        "endpoint": "/bok/statistics/metadata",
+        "service": service_name,
+        "stat_code": stat_code,
+        "start": start,
+        "end": end,
+        "row_count": len(rows),
+        "rows": rows,
+        **result,
+        "note": "메타데이터 서비스명은 ECOS API 제공 범위에 따라 StatisticMeta 등으로 조정할 수 있습니다."
+    }
+
+
+@app.get("/bok/statistics/raw")
+def bok_raw(
+    service_name: str = Query(..., description="ECOS 서비스명. 예: StatisticTableList, StatisticItemList, StatisticSearch"),
+    path: str = Query("", description="서비스명 뒤에 붙일 경로. 예: 1/100/731Y001/D/20250101/20250131/0000001"),
+    language: Optional[str] = Query(None, description="언어. kr 또는 en. 미입력 시 BOK_DEFAULT_LANG 사용"),
+    response_format: Optional[str] = Query(None, description="응답 형식. json 또는 xml. 미입력 시 BOK_DEFAULT_FORMAT 사용")
+):
+    """
+    한국은행 ECOS API 원시 호출 endpoint.
+    GPT 스키마에는 일반적으로 넣지 않아도 됩니다.
+    """
+    path_parts = [part for part in path.split("/") if part.strip()] if path else []
+
+    result = call_bok_api(
+        service_name=service_name,
+        path_parts=path_parts,
+        response_format=response_format,
+        language=language,
+    )
+
+    rows = extract_bok_rows(result.get("data"))
+
+    return {
+        "api": "Bank of Korea ECOS",
+        "endpoint": "/bok/statistics/raw",
+        "service": service_name,
+        "path": path,
+        "row_count": len(rows),
+        "sample_rows": rows[:5],
+        **result,
     }
 
 
@@ -1212,6 +1724,310 @@ def fsc_raw(
     }
 
 
+
+# =========================================================
+# FSC financial information helpers / endpoints
+# =========================================================
+
+def require_fsc_fin_service_key() -> str:
+    """
+    금융위원회 기업 재무정보 API 인증키 확인.
+    FSC_FIN_SERVICE_KEY가 없으면 기존 FSC_SERVICE_KEY를 재사용합니다.
+    """
+    if not FSC_FIN_SERVICE_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="FSC_FIN_SERVICE_KEY 또는 FSC_SERVICE_KEY가 설정되어 있지 않습니다. Render 환경변수를 확인하세요."
+        )
+    return unquote(FSC_FIN_SERVICE_KEY)
+
+
+def build_fsc_fin_params(
+    base_date: Optional[str],
+    corporate_registration_number: Optional[str],
+    business_registration_number: Optional[str],
+    company_name: Optional[str],
+    page_no: int,
+    num_of_rows: int,
+    extra_params: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """
+    금융위원회 기업 재무정보 API 요청 파라미터 생성.
+
+    공통 파라미터:
+    - serviceKey
+    - pageNo
+    - numOfRows
+    - resultType
+
+    검색 파라미터는 API 문서/버전 차이를 흡수하기 위해 basDt, crno, bzno, corpNm, fnccmpNm을 유연하게 사용합니다.
+    """
+    params: dict[str, Any] = {
+        FSC_FIN_PARAM_PAGE_NO: page_no,
+        FSC_FIN_PARAM_NUM_OF_ROWS: num_of_rows,
+        FSC_FIN_PARAM_RESULT_TYPE: FSC_FIN_RESULT_TYPE_VALUE,
+    }
+
+    base_date_clean = normalize_fsc_base_date(base_date)
+    crno_clean = normalize_corporate_registration_number(corporate_registration_number)
+    bzno_clean = normalize_business_number(business_registration_number)
+    company_name_clean = normalize_text(company_name)
+
+    if base_date_clean:
+        params["basDt"] = base_date_clean
+    if crno_clean:
+        params["crno"] = crno_clean
+    if bzno_clean:
+        params["bzno"] = bzno_clean
+    if company_name_clean:
+        params["corpNm"] = company_name_clean
+        params["fnccmpNm"] = company_name_clean
+
+    if extra_params:
+        params.update(extra_params)
+
+    return {
+        key: value
+        for key, value in params.items()
+        if value is not None and str(value).strip() != ""
+    }
+
+
+def call_fsc_fin_api(api_url: str, params: dict[str, Any]) -> dict[str, Any]:
+    """
+    금융위원회 기업 재무정보 API 공통 호출 함수.
+    """
+    if not api_url:
+        raise HTTPException(
+            status_code=500,
+            detail="FSC 기업 재무정보 API URL이 설정되어 있지 않습니다. Render 환경변수를 확인하세요."
+        )
+
+    clean_params = {
+        key: value
+        for key, value in params.items()
+        if value is not None and str(value).strip() != ""
+    }
+    clean_params["serviceKey"] = require_fsc_fin_service_key()
+    clean_params.setdefault(FSC_FIN_PARAM_RESULT_TYPE, FSC_FIN_RESULT_TYPE_VALUE)
+
+    try:
+        res = requests.get(api_url, params=clean_params, timeout=30)
+        res.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"FSC 기업 재무정보 API 요청 실패: {str(e)}"
+        )
+
+    return parse_fsc_response(res)
+
+
+def normalize_fsc_financial_item(item: dict[str, Any]) -> dict[str, Any]:
+    """
+    금융위원회 기업 재무정보 응답을 느슨하게 표준화합니다.
+    상세 필드명은 API 응답 원문 raw를 우선 보존합니다.
+    """
+    if not isinstance(item, dict):
+        return {"raw": item}
+
+    return {
+        "base_date": pick_first(item, "basDt", "baseDate", "기준일자"),
+        "business_year": pick_first(item, "bizYear", "bsnsYear", "사업연도", "회계연도"),
+        "corporate_registration_number": pick_first(item, "crno", "법인등록번호"),
+        "business_registration_number": pick_first(item, "bzno", "사업자등록번호"),
+        "company_name": pick_first(item, "corpNm", "fnccmpNm", "enpNm", "기업명", "회사명"),
+        "financial_statement_type": pick_first(item, "fsDiv", "fsNm", "stmtType", "재무제표구분", "재무제표명"),
+        "account_name": pick_first(item, "accountNm", "acntNm", "acctNm", "계정과목명", "계정명"),
+        "account_code": pick_first(item, "accountCd", "acntCd", "acctCd", "계정과목코드"),
+        "current_amount": pick_first(item, "thstrmAmt", "curAmt", "thisTermAmt", "당기금액", "금액"),
+        "previous_amount": pick_first(item, "frmtrmAmt", "prevAmt", "formerTermAmt", "전기금액"),
+        "before_previous_amount": pick_first(item, "bfefrmtrmAmt", "beforeFormerTermAmt", "전전기금액"),
+        "currency": pick_first(item, "curCd", "currency", "통화"),
+        "raw": item,
+    }
+
+
+@app.get("/fsc/financial/summary")
+def fsc_financial_summary(
+    company_name: Optional[str] = Query(None, description="기업명. 예: 삼성전자"),
+    corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
+    business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
+    base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    page_no: int = Query(1, ge=1, description="페이지 번호"),
+    num_of_rows: int = Query(10, ge=1, le=100, description="한 페이지 결과 수")
+):
+    """
+    금융위원회 기업 재무정보 API - 요약재무제표조회.
+    """
+    params = build_fsc_fin_params(
+        base_date=base_date,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        company_name=company_name,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
+    )
+
+    data = call_fsc_fin_api(FSC_FIN_SUMMARY_URL, params)
+    items = extract_public_data_items(data)
+    financials = [normalize_fsc_financial_item(item) for item in items]
+
+    return {
+        "api_type": "SUMMARY",
+        "company_name": company_name,
+        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
+        "business_registration_number": normalize_business_number(business_registration_number),
+        "base_date": normalize_fsc_base_date(base_date),
+        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
+        "api_result": get_public_data_result(data),
+        "count": len(financials),
+        "financials": financials,
+        "raw": data,
+        "note": (
+            "금융위원회 기업 재무정보 API의 요약재무제표조회 결과입니다. "
+            "감사·실사 목적에서는 DART 재무제표 원문과 대조하세요."
+        ),
+    }
+
+
+@app.get("/fsc/financial/balance-sheet")
+def fsc_financial_balance_sheet(
+    company_name: Optional[str] = Query(None, description="기업명. 예: 삼성전자"),
+    corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
+    business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
+    base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    page_no: int = Query(1, ge=1, description="페이지 번호"),
+    num_of_rows: int = Query(100, ge=1, le=100, description="한 페이지 결과 수")
+):
+    """
+    금융위원회 기업 재무정보 API - 재무상태표조회.
+    """
+    params = build_fsc_fin_params(
+        base_date=base_date,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        company_name=company_name,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
+    )
+
+    data = call_fsc_fin_api(FSC_FIN_BALANCE_SHEET_URL, params)
+    items = extract_public_data_items(data)
+    accounts = [normalize_fsc_financial_item(item) for item in items]
+
+    return {
+        "api_type": "BALANCE_SHEET",
+        "company_name": company_name,
+        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
+        "business_registration_number": normalize_business_number(business_registration_number),
+        "base_date": normalize_fsc_base_date(base_date),
+        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
+        "api_result": get_public_data_result(data),
+        "count": len(accounts),
+        "accounts": accounts,
+        "raw": data,
+        "note": (
+            "금융위원회 기업 재무정보 API의 재무상태표조회 결과입니다. "
+            "계정과목명·금액은 DART 공시 원문과 대조하세요."
+        ),
+    }
+
+
+@app.get("/fsc/financial/income-statement")
+def fsc_financial_income_statement(
+    company_name: Optional[str] = Query(None, description="기업명. 예: 삼성전자"),
+    corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
+    business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
+    base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    page_no: int = Query(1, ge=1, description="페이지 번호"),
+    num_of_rows: int = Query(100, ge=1, le=100, description="한 페이지 결과 수")
+):
+    """
+    금융위원회 기업 재무정보 API - 손익계산서조회.
+    """
+    params = build_fsc_fin_params(
+        base_date=base_date,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        company_name=company_name,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
+    )
+
+    data = call_fsc_fin_api(FSC_FIN_INCOME_STATEMENT_URL, params)
+    items = extract_public_data_items(data)
+    accounts = [normalize_fsc_financial_item(item) for item in items]
+
+    return {
+        "api_type": "INCOME_STATEMENT",
+        "company_name": company_name,
+        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
+        "business_registration_number": normalize_business_number(business_registration_number),
+        "base_date": normalize_fsc_base_date(base_date),
+        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
+        "api_result": get_public_data_result(data),
+        "count": len(accounts),
+        "accounts": accounts,
+        "raw": data,
+        "note": (
+            "금융위원회 기업 재무정보 API의 손익계산서조회 결과입니다. "
+            "매출액·영업손익 등 주요 수치는 DART 원문과 대조하세요."
+        ),
+    }
+
+
+@app.get("/fsc/financial/raw")
+def fsc_financial_raw(
+    api_type: str = Query(..., description="API 유형: SUMMARY, BS, IS"),
+    company_name: Optional[str] = Query(None, description="기업명. 예: 삼성전자"),
+    corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
+    business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
+    base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    page_no: int = Query(1, ge=1),
+    num_of_rows: int = Query(5, ge=1, le=100)
+):
+    """
+    금융위원회 기업 재무정보 API 응답 구조 확인용 raw endpoint.
+    """
+    api_type_upper = normalize_text(api_type).upper()
+
+    api_map = {
+        "SUMMARY": FSC_FIN_SUMMARY_URL,
+        "SUMM": FSC_FIN_SUMMARY_URL,
+        "BS": FSC_FIN_BALANCE_SHEET_URL,
+        "BALANCE_SHEET": FSC_FIN_BALANCE_SHEET_URL,
+        "IS": FSC_FIN_INCOME_STATEMENT_URL,
+        "INCOME_STATEMENT": FSC_FIN_INCOME_STATEMENT_URL,
+    }
+
+    api_url = api_map.get(api_type_upper)
+    if not api_url:
+        raise HTTPException(status_code=400, detail="api_type은 SUMMARY, BS, IS 중 하나여야 합니다.")
+
+    params = build_fsc_fin_params(
+        base_date=base_date,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        company_name=company_name,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
+    )
+
+    data = call_fsc_fin_api(api_url, params)
+    items = extract_public_data_items(data)
+
+    return {
+        "api_type": api_type_upper,
+        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
+        "api_result": get_public_data_result(data),
+        "item_count": len(items),
+        "sample_items": items[:5],
+        "raw": data,
+    }
+
+
+
 # =========================================================
 # NTS helpers / endpoints
 # =========================================================
@@ -1550,6 +2366,480 @@ def nts_business_validate(
             "국세청 사업자등록 진위확인 결과입니다. 대표자명, 개업일자 등 입력값이 국세청 등록정보와 일치하는지 확인하는 용도입니다."
         ),
     }
+
+
+# =========================================================
+# NTS ASSET VALUE helpers / endpoints
+# =========================================================
+
+# 국세청_상업용건물/오피스텔 기준시가 ODCloud API는 연도별 UDDI endpoint가 나뉘어 있습니다.
+# Swagger paths 기준으로 연도별 endpoint를 매핑합니다.
+# 2020년 24153... endpoint는 Swagger 모델이 HTML로 잡혀 있어 우선 제외하고, 정상 필드가 보이는 04e7...을 기본 사용합니다.
+NTS_ASSET_VALUE_ENDPOINTS = {
+    "2005": [
+        "/3036455/v1/uddi:7942633b-648d-43da-b1be-98658c9ea42e_201908260940",
+    ],
+    "2006": [
+        "/3036455/v1/uddi:64b5c32e-24ea-4077-a584-8800beb329d4_201808021105",
+    ],
+    "2007": [
+        "/3036455/v1/uddi:331b9be1-0716-4c03-bd77-ca91f26a2442_201809191718",
+    ],
+    "2008": [
+        "/3036455/v1/uddi:d0ad6495-47cc-4946-91f3-9f0e01406cba_201809191732",
+    ],
+    "2009": [
+        "/3036455/v1/uddi:f05c2070-df5d-4a68-be1c-cd96153ba49e_201808021102",
+    ],
+    "2010": [
+        "/3036455/v1/uddi:0d1e3d92-d27f-4a64-be05-80ed4e4248a0_201808021104",
+    ],
+    "2011": [
+        "/3036455/v1/uddi:0baa629b-05aa-440a-a1fd-ad733c00b5bf_201810041325",
+    ],
+    "2012": [
+        "/3036455/v1/uddi:f4f61d99-dc4f-499b-b1c5-d3566b3cb851_201809272205",
+    ],
+    "2013": [
+        "/3036455/v1/uddi:900bec93-7e97-4c90-9ce0-878cd47d0cbd_201808021104",
+    ],
+    "2014": [
+        "/3036455/v1/uddi:9fb3218d-0789-4399-abe1-f3a67588658c_201809262004",
+    ],
+    "2015": [
+        "/3036455/v1/uddi:a3728396-464e-4cd6-8fe3-81920479b6df_201809262001",
+    ],
+    "2017": [
+        "/3036455/v1/uddi:1e77cb59-e03a-4440-a9e3-fc3460330fe9_201808021102",
+    ],
+    "2018": [
+        "/3036455/v1/uddi:e013f8f6-0e25-49bb-b04b-966dbf65a17f_201809272229",
+        "/3036455/v1/uddi:3962fe10-9f4f-4dd5-94c9-dbf7f3050b48_201809272231",
+    ],
+    "2019": [
+        "/3036455/v1/uddi:4668bee5-fbfd-41b1-a521-c839c3e01615_201909281433",
+        "/3036455/v1/uddi:45bfecd8-456a-430d-8a59-bd3d1145835e",
+    ],
+    "2020": [
+        "/3036455/v1/uddi:04e7fcee-3162-40ae-90e9-b1330f2e9b11",
+    ],
+}
+
+NTS_ASSET_VALUE_CLASSIFICATION_CODE_ENDPOINTS = {
+    "2018": [
+        "/3036455/v1/uddi:90352638-ef1f-4411-a230-9d372037b6f1_201809201424",
+    ],
+}
+
+
+def require_nts_asset_value_service_key() -> str:
+    """
+    국세청 상업용건물/오피스텔 기준시가 ODCloud API 인증키 확인.
+    NTS_ASSET_VALUE_SERVICE_KEY가 없으면 기존 NTS_SERVICE_KEY를 재사용합니다.
+    """
+    if not NTS_ASSET_VALUE_SERVICE_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="NTS_ASSET_VALUE_SERVICE_KEY 또는 NTS_SERVICE_KEY가 설정되어 있지 않습니다. Render 환경변수를 확인하세요."
+        )
+    return unquote(NTS_ASSET_VALUE_SERVICE_KEY)
+
+
+def build_nts_asset_value_url(endpoint_path: str) -> str:
+    endpoint_path_clean = normalize_text(endpoint_path)
+    if not endpoint_path_clean:
+        raise HTTPException(status_code=400, detail="endpoint_path가 비어 있습니다.")
+
+    if endpoint_path_clean.startswith("http://") or endpoint_path_clean.startswith("https://"):
+        return endpoint_path_clean
+
+    if not endpoint_path_clean.startswith("/"):
+        endpoint_path_clean = "/" + endpoint_path_clean
+
+    return f"{NTS_ASSET_VALUE_BASE_URL}{endpoint_path_clean}"
+
+
+def normalize_asset_value_year(year: Any) -> str:
+    year_clean = "".join(ch for ch in normalize_text(year) if ch.isdigit())
+    if len(year_clean) >= 4:
+        year_clean = year_clean[:4]
+
+    if year_clean not in NTS_ASSET_VALUE_ENDPOINTS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "지원하지 않는 기준연도입니다.",
+                "requested_year": year,
+                "available_years": sorted(NTS_ASSET_VALUE_ENDPOINTS.keys()),
+                "note": "Swagger에 확인된 연도별 UDDI endpoint만 매핑되어 있습니다. 2016년 등 일부 연도는 현재 매핑에 없습니다."
+            }
+        )
+
+    return year_clean
+
+
+def get_nts_asset_value_endpoint_paths(year: str, endpoint_index: Optional[int] = None) -> list[str]:
+    year_clean = normalize_asset_value_year(year)
+    endpoint_paths = NTS_ASSET_VALUE_ENDPOINTS[year_clean]
+
+    if endpoint_index is not None:
+        if endpoint_index < 0 or endpoint_index >= len(endpoint_paths):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "endpoint_index 범위가 올바르지 않습니다.",
+                    "year": year_clean,
+                    "endpoint_count": len(endpoint_paths),
+                    "valid_index_range": f"0~{len(endpoint_paths) - 1}",
+                }
+            )
+        return [endpoint_paths[endpoint_index]]
+
+    return endpoint_paths
+
+
+def call_nts_asset_value_api(
+    endpoint_path: str,
+    params: dict[str, Any],
+    use_header_auth: bool = False,
+) -> dict[str, Any]:
+    """
+    ODCloud 기준시가 API 공통 호출.
+    Swagger상 인증은 header Authorization 또는 query serviceKey를 모두 지원합니다.
+    기본은 query serviceKey 방식으로 호출합니다.
+    """
+    api_url = build_nts_asset_value_url(endpoint_path)
+
+    clean_params = {
+        k: v for k, v in params.items()
+        if v is not None and str(v).strip() != ""
+    }
+
+    clean_params.setdefault("returnType", NTS_ASSET_VALUE_RESPONSE_TYPE)
+
+    headers = {}
+    service_key = require_nts_asset_value_service_key()
+
+    if use_header_auth:
+        headers["Authorization"] = service_key
+    else:
+        clean_params["serviceKey"] = service_key
+
+    try:
+        res = requests.get(api_url, params=clean_params, headers=headers, timeout=30)
+        res.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"국세청 상업용건물/오피스텔 기준시가 API 요청 실패: {str(e)}"
+        )
+
+    try:
+        data = res.json()
+        if isinstance(data, dict):
+            return data
+        return {"data": data}
+    except ValueError:
+        return {
+            "content_type": res.headers.get("content-type"),
+            "text": res.text[:5000],
+            "note": "응답이 JSON이 아닙니다. returnType 또는 ODCloud API 응답 형식을 확인하세요."
+        }
+
+
+def normalize_nts_asset_value_item(item: dict[str, Any]) -> dict[str, Any]:
+    """
+    국세청 기준시가 항목 표준화.
+    연도별 컬럼명이 고시가격/고시가격(원), 전유면적/전용면적 등으로 달라질 수 있어 유연하게 처리합니다.
+    """
+    if not isinstance(item, dict):
+        return {"raw": item}
+
+    return {
+        "commercial_building_number": pick_first(item, "상가건물번호"),
+        "building_type": pick_first(item, "건물구분", "상가종류코드"),
+        "notice_date": pick_first(item, "고시일자"),
+        "legal_dong_code": pick_first(item, "법정동코드"),
+        "special_land_code": pick_first(item, "특수지코드"),
+        "lot_number": pick_first(item, "번지"),
+        "unit_number": pick_first(item, "호"),
+        "block_address": pick_first(item, "상가건물블록주소"),
+        "building_address": pick_first(item, "상가건물동주소"),
+        "floor_type_code": pick_first(item, "건물층구분코드"),
+        "floor_address": pick_first(item, "상가건물층주소"),
+        "unit_address": pick_first(item, "상가건물호주소"),
+        "notified_price": pick_first(item, "고시가격", "고시가격(원)"),
+        "exclusive_area": pick_first(item, "전유면적", "전유면적(㎡)", "전용면적"),
+        "common_area": pick_first(item, "공용면적", "공용면적(㎡)", "공유면적"),
+        "raw": item,
+    }
+
+
+def filter_nts_asset_value_items(
+    items: list[Any],
+    building_number: Optional[str] = None,
+    legal_dong_code: Optional[str] = None,
+    lot_number: Optional[str] = None,
+    unit_number: Optional[str] = None,
+    keyword: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """
+    ODCloud 원 API가 Swagger상 page/perPage/returnType만 명시하므로,
+    주소·호수 등 검색은 서버에서 반환된 page 데이터 범위 내에서 보조 필터링합니다.
+    대량 전체 검색이 필요한 경우 page/perPage를 조정하거나 별도 DB 적재가 필요합니다.
+    """
+    normalized_items = [
+        normalize_nts_asset_value_item(item)
+        for item in items
+        if isinstance(item, dict)
+    ]
+
+    def contains(value: Any, needle: Optional[str]) -> bool:
+        if needle is None or normalize_text(needle) == "":
+            return True
+        return normalize_text(needle) in normalize_text(value)
+
+    filtered = []
+    for item in normalized_items:
+        raw = item.get("raw") or {}
+        searchable_text = " ".join(normalize_text(v) for v in raw.values())
+
+        if building_number and normalize_text(item.get("commercial_building_number")) != normalize_text(building_number):
+            continue
+        if legal_dong_code and normalize_text(item.get("legal_dong_code")) != normalize_text(legal_dong_code):
+            continue
+        if lot_number and not contains(item.get("lot_number"), lot_number):
+            continue
+        if unit_number and not contains(item.get("unit_number"), unit_number):
+            continue
+        if keyword and normalize_text(keyword) not in searchable_text:
+            continue
+
+        filtered.append(item)
+
+    return filtered
+
+
+@app.get("/nts/asset-value/endpoints")
+def nts_asset_value_endpoints():
+    """
+    국세청 상업용건물/오피스텔 기준시가 API의 연도별 UDDI endpoint 매핑을 반환합니다.
+    """
+    return {
+        "base_url": NTS_ASSET_VALUE_BASE_URL,
+        "response_type": NTS_ASSET_VALUE_RESPONSE_TYPE,
+        "available_years": sorted(NTS_ASSET_VALUE_ENDPOINTS.keys()),
+        "endpoints": {
+            year: [build_nts_asset_value_url(path) for path in paths]
+            for year, paths in NTS_ASSET_VALUE_ENDPOINTS.items()
+        },
+        "classification_code_endpoints": {
+            year: [build_nts_asset_value_url(path) for path in paths]
+            for year, paths in NTS_ASSET_VALUE_CLASSIFICATION_CODE_ENDPOINTS.items()
+        },
+        "note": (
+            "ODCloud Swagger 기준 연도별 endpoint 매핑입니다. 일부 연도는 endpoint가 2개로 분할되어 있어 "
+            "기본 조회 시 여러 endpoint를 호출해 결과를 합산합니다."
+        ),
+    }
+
+
+@app.get("/nts/asset-value/standard-value")
+def nts_asset_value_standard_value(
+    year: str = Query(..., description="기준연도. 예: 2020, 2019, 2018"),
+    page: int = Query(1, ge=1, description="page index"),
+    per_page: int = Query(10, ge=1, le=1000, description="page size"),
+    endpoint_index: Optional[int] = Query(None, description="특정 연도에 endpoint가 여러 개인 경우 0부터 시작하는 endpoint index. 미입력 시 모두 조회"),
+    building_number: Optional[str] = Query(None, description="상가건물번호 정확일치 서버측 보조 필터"),
+    legal_dong_code: Optional[str] = Query(None, description="법정동코드 정확일치 서버측 보조 필터"),
+    lot_number: Optional[str] = Query(None, description="번지 부분일치 서버측 보조 필터"),
+    unit_number: Optional[str] = Query(None, description="호 부분일치 서버측 보조 필터"),
+    keyword: Optional[str] = Query(None, description="반환 page 내 전체 컬럼 텍스트 부분검색 서버측 보조 필터"),
+    return_raw: bool = Query(False, description="True이면 원 API raw 응답도 포함"),
+    use_header_auth: bool = Query(False, description="True이면 Authorization header 인증 사용. 기본은 query serviceKey")
+):
+    """
+    국세청 상업용건물/오피스텔 기준시가 조회.
+    연도별 endpoint를 자동 선택합니다. 여러 endpoint가 있는 연도는 기본적으로 모두 호출합니다.
+    """
+    year_clean = normalize_asset_value_year(year)
+    endpoint_paths = get_nts_asset_value_endpoint_paths(year_clean, endpoint_index)
+
+    api_results = []
+    all_items = []
+    api_status = []
+
+    for idx, endpoint_path in enumerate(endpoint_paths):
+        params = {
+            "page": page,
+            "perPage": per_page,
+            "returnType": NTS_ASSET_VALUE_RESPONSE_TYPE,
+        }
+
+        data = call_nts_asset_value_api(endpoint_path, params=params, use_header_auth=use_header_auth)
+        items = data.get("data") or []
+        if isinstance(items, dict):
+            items = [items]
+        if not isinstance(items, list):
+            items = []
+
+        filtered_items = filter_nts_asset_value_items(
+            items,
+            building_number=building_number,
+            legal_dong_code=legal_dong_code,
+            lot_number=lot_number,
+            unit_number=unit_number,
+            keyword=keyword,
+        )
+
+        all_items.extend(filtered_items)
+
+        api_status.append({
+            "endpoint_index": idx if endpoint_index is None else endpoint_index,
+            "endpoint_path": endpoint_path,
+            "url": build_nts_asset_value_url(endpoint_path),
+            "page": data.get("page"),
+            "perPage": data.get("perPage"),
+            "totalCount": data.get("totalCount"),
+            "currentCount": data.get("currentCount"),
+            "matchCount": data.get("matchCount"),
+            "returned_item_count": len(items),
+            "filtered_item_count": len(filtered_items),
+        })
+
+        if return_raw:
+            api_results.append(data)
+
+    result = {
+        "year": year_clean,
+        "page": page,
+        "per_page": per_page,
+        "endpoint_count": len(endpoint_paths),
+        "filters": {
+            "building_number": building_number,
+            "legal_dong_code": legal_dong_code,
+            "lot_number": lot_number,
+            "unit_number": unit_number,
+            "keyword": keyword,
+        },
+        "count": len(all_items),
+        "items": all_items,
+        "api_status": api_status,
+        "note": (
+            "국세청 상업용건물/오피스텔 기준시가 ODCloud API 결과입니다. "
+            "Swagger상 검색조건은 page/perPage/returnType만 명시되어 있어 주소·호수 검색은 현재 page 결과 내 서버측 보조 필터입니다. "
+            "정확한 물건 검색에는 연도, 법정동코드, 번지, 호, 상가건물번호 및 충분한 page/perPage 조회가 필요합니다."
+        ),
+    }
+
+    if return_raw:
+        result["raw_results"] = api_results
+
+    return result
+
+
+@app.get("/nts/asset-value/classification-codes")
+def nts_asset_value_classification_codes(
+    year: str = Query("2018", description="분류코드표 기준연도. 현재 Swagger상 2018 매핑 확인"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(100, ge=1, le=1000),
+    return_raw: bool = Query(False),
+    use_header_auth: bool = Query(False)
+):
+    """
+    국세청 상업용건물/오피스텔 기준시가 분류코드표 조회.
+    """
+    year_clean = "".join(ch for ch in normalize_text(year) if ch.isdigit())[:4] or "2018"
+    endpoint_paths = NTS_ASSET_VALUE_CLASSIFICATION_CODE_ENDPOINTS.get(year_clean)
+
+    if not endpoint_paths:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "지원하지 않는 분류코드표 기준연도입니다.",
+                "requested_year": year,
+                "available_years": sorted(NTS_ASSET_VALUE_CLASSIFICATION_CODE_ENDPOINTS.keys()),
+            }
+        )
+
+    data = call_nts_asset_value_api(
+        endpoint_paths[0],
+        params={
+            "page": page,
+            "perPage": per_page,
+            "returnType": NTS_ASSET_VALUE_RESPONSE_TYPE,
+        },
+        use_header_auth=use_header_auth,
+    )
+    items = data.get("data") or []
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        items = []
+
+    result = {
+        "year": year_clean,
+        "page": page,
+        "per_page": per_page,
+        "count": len(items),
+        "items": items,
+        "api_status": {
+            "url": build_nts_asset_value_url(endpoint_paths[0]),
+            "page": data.get("page"),
+            "perPage": data.get("perPage"),
+            "totalCount": data.get("totalCount"),
+            "currentCount": data.get("currentCount"),
+            "matchCount": data.get("matchCount"),
+        },
+    }
+
+    if return_raw:
+        result["raw"] = data
+
+    return result
+
+
+@app.get("/nts/asset-value/raw")
+def nts_asset_value_raw(
+    year: str = Query(..., description="기준연도. 예: 2020"),
+    endpoint_index: int = Query(0, ge=0, description="연도별 endpoint index"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(5, ge=1, le=1000),
+    use_header_auth: bool = Query(False)
+):
+    """
+    국세청 상업용건물/오피스텔 기준시가 ODCloud API 응답 구조 확인용 raw endpoint.
+    """
+    year_clean = normalize_asset_value_year(year)
+    endpoint_path = get_nts_asset_value_endpoint_paths(year_clean, endpoint_index)[0]
+
+    data = call_nts_asset_value_api(
+        endpoint_path,
+        params={
+            "page": page,
+            "perPage": per_page,
+            "returnType": NTS_ASSET_VALUE_RESPONSE_TYPE,
+        },
+        use_header_auth=use_header_auth,
+    )
+
+    items = data.get("data") or []
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        items = []
+
+    return {
+        "year": year_clean,
+        "endpoint_index": endpoint_index,
+        "url": build_nts_asset_value_url(endpoint_path),
+        "page": page,
+        "per_page": per_page,
+        "item_count": len(items),
+        "sample_items": items[:5],
+        "raw": data,
+    }
+
 
 
 # =========================================================
