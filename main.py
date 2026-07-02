@@ -13,13 +13,13 @@ from urllib.parse import unquote
 load_dotenv()
 
 app = FastAPI(
-    title="DART·KRX·NTS·LAW·FSC Disclosure & Market Research API",
-    version="1.9.1",
+    title="DART·KRX·NTS·LAW·FSC·REB Disclosure & Market Research API",
+    version="1.10.0",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
         "Korea Law Open API, NTS Business Registration API, and FSC company information APIs. It supports DART-registered companies, including listed and non-listed disclosure companies, "
         "KRX market data for KOSPI, KOSDAQ, KONEX, and ETFs, NTS business registration status/validation, FSC company overview/affiliates/subsidiaries lookup, legal search/article lookup, "
-        "treaty search/detail lookup, and tax-law research endpoints for cases, appeals, interpretations, administrative rules, attachments, histories, comparisons, terms, and related laws."
+        "treaty search/detail lookup, tax-law research endpoints for cases, appeals, interpretations, administrative rules, attachments, histories, comparisons, terms, and related laws, and Korea Real Estate Board R-ONE statistics lookup."
     )
 )
 
@@ -101,6 +101,29 @@ FSC_PARAM_NUM_OF_ROWS = os.getenv("FSC_PARAM_NUM_OF_ROWS", "numOfRows")
 FSC_PARAM_RESULT_TYPE = os.getenv("FSC_PARAM_RESULT_TYPE", "resultType")
 FSC_RESULT_TYPE_VALUE = os.getenv("FSC_RESULT_TYPE_VALUE", "json")
 
+# 한국부동산원 R-ONE 부동산통계 Open API
+# R-ONE Open API 명세 기준:
+# - 서비스 통계목록: https://www.reb.or.kr/r-one/openapi/SttsApiTbl.do
+# - 통계 세부항목 목록: https://www.reb.or.kr/r-one/openapi/SttsApiTblItm.do
+# - 통계 조회 조건 설정/자료 조회: https://www.reb.or.kr/r-one/openapi/SttsApiTblData.do
+# 기본인자: KEY, Type, pIndex, pSize
+REB_API_KEY = os.getenv("REB_API_KEY")
+REB_AUTH_PARAM_NAME = os.getenv("REB_AUTH_PARAM_NAME", "KEY")
+REB_RESPONSE_TYPE = os.getenv("REB_RESPONSE_TYPE", "json")
+
+REB_STAT_TABLE_LIST_URL = os.getenv(
+    "REB_STAT_TABLE_LIST_URL",
+    "https://www.reb.or.kr/r-one/openapi/SttsApiTbl.do",
+)
+REB_STAT_ITEM_LIST_URL = os.getenv(
+    "REB_STAT_ITEM_LIST_URL",
+    "https://www.reb.or.kr/r-one/openapi/SttsApiTblItm.do",
+)
+REB_STAT_DATA_URL = os.getenv(
+    "REB_STAT_DATA_URL",
+    "https://www.reb.or.kr/r-one/openapi/SttsApiTblData.do",
+)
+
 # =========================================================
 # Root / debug
 # =========================================================
@@ -109,13 +132,14 @@ FSC_RESULT_TYPE_VALUE = os.getenv("FSC_RESULT_TYPE_VALUE", "json")
 def root():
     return {
         "status": "ok",
-        "message": "DART·KRX·LAW·NTS·FSC Disclosure, Market & Legal Research API is running.",
+        "message": "DART·KRX·LAW·NTS·FSC·REB Disclosure, Market & Legal Research API is running.",
         "scope": {
             "dart": "DART-registered companies, including listed and non-listed disclosure companies.",
             "krx": "KRX market data for KOSPI, KOSDAQ, KONEX, and ETF if API URLs and key are configured.",
             "law": "Korea Law Open API search, article lookup, and treaty lookup if LAW_OC is configured.",
             "nts": "NTS business registration status and validation lookup if NTS_SERVICE_KEY is configured.",
-            "fsc": "FSC company overview, affiliates, and subsidiaries lookup if FSC_SERVICE_KEY and FSC API URLs are configured."
+            "fsc": "FSC company overview, affiliates, and subsidiaries lookup if FSC_SERVICE_KEY and FSC API URLs are configured.",
+            "real_estate": "Korea Real Estate Board R-ONE statistics lookup if REB_API_KEY is configured."
         },
         "endpoints": {
             "dart": [
@@ -138,6 +162,12 @@ def root():
                 "/fsc/company-subsidiaries",
                 "/fsc/company-profile",
                 "/fsc/raw"
+            ],
+            "real_estate": [
+                "/real-estate/reb/tables",
+                "/real-estate/reb/items",
+                "/real-estate/reb/data",
+                "/real-estate/reb/raw"
             ],
             "law": [
                 "/law/search",
@@ -225,6 +255,14 @@ def debug_env():
         "fsc_param_num_of_rows": FSC_PARAM_NUM_OF_ROWS,
         "fsc_param_result_type": FSC_PARAM_RESULT_TYPE,
         "fsc_result_type_value": FSC_RESULT_TYPE_VALUE,
+
+        "has_reb_api_key": bool(REB_API_KEY),
+        "reb_api_key_length": len(REB_API_KEY) if REB_API_KEY else 0,
+        "reb_auth_param_name": REB_AUTH_PARAM_NAME,
+        "reb_response_type": REB_RESPONSE_TYPE,
+        "reb_stat_table_list_url": REB_STAT_TABLE_LIST_URL,
+        "reb_stat_item_list_url": REB_STAT_ITEM_LIST_URL,
+        "reb_stat_data_url": REB_STAT_DATA_URL,
     }
 
 
@@ -293,6 +331,256 @@ def date_range_yyyymmdd(start_date: str, end_date: str):
         cur += timedelta(days=1)
 
     return dates
+
+
+
+# =========================================================
+# REB / Korea Real Estate Board R-ONE helpers / endpoints
+# =========================================================
+
+def require_reb_api_key() -> str:
+    """
+    한국부동산원 R-ONE Open API 인증키 확인.
+    Render 환경변수 또는 .env 파일에 REB_API_KEY를 설정해야 합니다.
+    """
+    if not REB_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="REB_API_KEY가 설정되어 있지 않습니다. Render 환경변수 또는 .env 파일을 확인하세요."
+        )
+    return REB_API_KEY
+
+
+def parse_reb_response(res: requests.Response, response_type: str):
+    """
+    한국부동산원 R-ONE API 응답 파싱.
+    Type=json이면 JSON 파싱을 우선하고, 실패하면 XML/text fallback을 반환합니다.
+    """
+    response_type_lower = normalize_text(response_type).lower()
+
+    if response_type_lower == "json":
+        try:
+            return res.json()
+        except ValueError:
+            pass
+
+    try:
+        root = ET.fromstring(res.content)
+        return {root.tag: xml_element_to_dict(root)}
+    except ET.ParseError:
+        return {
+            "content_type": res.headers.get("content-type"),
+            "text": res.text[:5000],
+            "note": "한국부동산원 API 응답이 JSON/XML로 파싱되지 않았습니다. Type, KEY, 요청 파라미터를 확인하세요."
+        }
+
+
+def call_reb_api(api_url: str, params: dict[str, Any], response_type: Optional[str] = None):
+    """
+    한국부동산원 R-ONE Open API 공통 호출 함수.
+    명세서 기준 기본인자는 KEY, Type, pIndex, pSize입니다.
+    """
+    if not api_url:
+        raise HTTPException(
+            status_code=500,
+            detail="한국부동산원 API URL이 설정되어 있지 않습니다. Render 환경변수를 확인하세요."
+        )
+
+    response_type_value = response_type or REB_RESPONSE_TYPE or "json"
+
+    clean_params = {
+        key: value
+        for key, value in params.items()
+        if value is not None and str(value).strip() != ""
+    }
+
+    clean_params[REB_AUTH_PARAM_NAME] = require_reb_api_key()
+    clean_params.setdefault("Type", response_type_value)
+
+    try:
+        res = requests.get(api_url, params=clean_params, timeout=30)
+        res.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"한국부동산원 R-ONE API 요청 실패: {str(e)}"
+        )
+
+    return {
+        "request_url": api_url,
+        "params_used": {k: v for k, v in clean_params.items() if k != REB_AUTH_PARAM_NAME},
+        "data": parse_reb_response(res, response_type_value),
+    }
+
+
+def get_reb_api_url(api_type: str) -> str:
+    api_type_upper = normalize_text(api_type).upper()
+
+    api_map = {
+        "TABLES": REB_STAT_TABLE_LIST_URL,
+        "TABLE_LIST": REB_STAT_TABLE_LIST_URL,
+        "STAT_TABLE_LIST": REB_STAT_TABLE_LIST_URL,
+        "ITEMS": REB_STAT_ITEM_LIST_URL,
+        "ITEM_LIST": REB_STAT_ITEM_LIST_URL,
+        "STAT_ITEM_LIST": REB_STAT_ITEM_LIST_URL,
+        "DATA": REB_STAT_DATA_URL,
+        "STAT_DATA": REB_STAT_DATA_URL,
+    }
+
+    api_url = api_map.get(api_type_upper)
+
+    if not api_url:
+        raise HTTPException(
+            status_code=400,
+            detail="api_type은 TABLES, ITEMS, DATA 중 하나여야 합니다."
+        )
+
+    return api_url
+
+
+@app.get("/real-estate/reb/tables")
+def reb_stat_tables(
+    statbl_id: Optional[str] = Query(None, alias="STATBL_ID", description="통계표ID. 미입력 시 전체 서비스 통계목록 조회"),
+    pIndex: int = Query(1, ge=1, description="페이지 위치"),
+    pSize: int = Query(100, ge=1, le=1000, description="페이지당 요청 숫자"),
+    response_type: str = Query("json", description="호출 문서 형식: json 또는 xml")
+):
+    """
+    한국부동산원 R-ONE 서비스 통계목록 조회.
+    내부적으로 SttsApiTbl.do를 호출합니다.
+    """
+    params = {
+        "pIndex": pIndex,
+        "pSize": pSize,
+        "STATBL_ID": statbl_id,
+    }
+
+    return {
+        "api": "Korea Real Estate Board R-ONE",
+        "endpoint": "/real-estate/reb/tables",
+        "description": "서비스 통계목록 조회",
+        **call_reb_api(REB_STAT_TABLE_LIST_URL, params=params, response_type=response_type),
+    }
+
+
+@app.get("/real-estate/reb/items")
+def reb_stat_items(
+    statbl_id: str = Query(..., alias="STATBL_ID", description="통계표ID"),
+    pIndex: int = Query(1, ge=1, description="페이지 위치"),
+    pSize: int = Query(100, ge=1, le=1000, description="페이지당 요청 숫자"),
+    response_type: str = Query("json", description="호출 문서 형식: json 또는 xml")
+):
+    """
+    한국부동산원 R-ONE 통계 세부항목 목록 조회.
+    내부적으로 SttsApiTblItm.do를 호출하며, STATBL_ID가 필요합니다.
+    """
+    params = {
+        "pIndex": pIndex,
+        "pSize": pSize,
+        "STATBL_ID": statbl_id,
+    }
+
+    return {
+        "api": "Korea Real Estate Board R-ONE",
+        "endpoint": "/real-estate/reb/items",
+        "description": "통계 세부항목 목록 조회",
+        "statbl_id": statbl_id,
+        **call_reb_api(REB_STAT_ITEM_LIST_URL, params=params, response_type=response_type),
+    }
+
+
+@app.get("/real-estate/reb/data")
+def reb_stat_data(
+    statbl_id: str = Query(..., alias="STATBL_ID", description="통계표 ID"),
+    dtacycle_cd: str = Query(..., alias="DTACYCLE_CD", description="주기코드"),
+    wrttime_idtfr_id: Optional[str] = Query(None, alias="WRTTIME_IDTFR_ID", description="자료작성 시점"),
+    grp_id: Optional[str] = Query(None, alias="GRP_ID", description="그룹ID"),
+    cls_id: Optional[str] = Query(None, alias="CLS_ID", description="분류ID"),
+    itm_id: Optional[str] = Query(None, alias="ITM_ID", description="항목ID"),
+    start_wrttime: Optional[str] = Query(None, alias="START_WRTTIME", description="자료작성 시점 시작일"),
+    end_wrttime: Optional[str] = Query(None, alias="END_WRTTIME", description="자료작성 시점 종료일"),
+    pIndex: int = Query(1, ge=1, description="페이지 위치"),
+    pSize: int = Query(100, ge=1, le=1000, description="페이지당 요청 숫자"),
+    response_type: str = Query("json", description="호출 문서 형식: json 또는 xml")
+):
+    """
+    한국부동산원 R-ONE 통계자료 조회.
+    내부적으로 SttsApiTblData.do를 호출합니다.
+    명세서 기준 STATBL_ID, DTACYCLE_CD는 필수입니다.
+    """
+    params = {
+        "pIndex": pIndex,
+        "pSize": pSize,
+        "STATBL_ID": statbl_id,
+        "DTACYCLE_CD": dtacycle_cd,
+        "WRTTIME_IDTFR_ID": wrttime_idtfr_id,
+        "GRP_ID": grp_id,
+        "CLS_ID": cls_id,
+        "ITM_ID": itm_id,
+        "START_WRTTIME": start_wrttime,
+        "END_WRTTIME": end_wrttime,
+    }
+
+    return {
+        "api": "Korea Real Estate Board R-ONE",
+        "endpoint": "/real-estate/reb/data",
+        "description": "통계자료 조회",
+        "statbl_id": statbl_id,
+        "dtacycle_cd": dtacycle_cd,
+        **call_reb_api(REB_STAT_DATA_URL, params=params, response_type=response_type),
+        "note": (
+            "R-ONE 통계자료 조회 결과입니다. STATBL_ID, DTACYCLE_CD, ITM_ID, CLS_ID 등은 "
+            "/real-estate/reb/tables 및 /real-estate/reb/items로 먼저 확인하세요."
+        ),
+    }
+
+
+@app.get("/real-estate/reb/raw")
+def reb_raw(
+    api_type: str = Query(..., description="API 유형: TABLES, ITEMS, DATA"),
+    statbl_id: Optional[str] = Query(None, alias="STATBL_ID", description="통계표 ID"),
+    dtacycle_cd: Optional[str] = Query(None, alias="DTACYCLE_CD", description="주기코드"),
+    wrttime_idtfr_id: Optional[str] = Query(None, alias="WRTTIME_IDTFR_ID", description="자료작성 시점"),
+    grp_id: Optional[str] = Query(None, alias="GRP_ID", description="그룹ID"),
+    cls_id: Optional[str] = Query(None, alias="CLS_ID", description="분류ID"),
+    itm_id: Optional[str] = Query(None, alias="ITM_ID", description="항목ID"),
+    start_wrttime: Optional[str] = Query(None, alias="START_WRTTIME", description="자료작성 시점 시작일"),
+    end_wrttime: Optional[str] = Query(None, alias="END_WRTTIME", description="자료작성 시점 종료일"),
+    pIndex: int = Query(1, ge=1, description="페이지 위치"),
+    pSize: int = Query(10, ge=1, le=1000, description="페이지당 요청 숫자"),
+    response_type: str = Query("json", description="호출 문서 형식: json 또는 xml")
+):
+    """
+    한국부동산원 R-ONE API 응답 구조 확인용 원시 endpoint.
+    GPT 스키마에는 일반적으로 넣지 않아도 됩니다.
+    """
+    api_url = get_reb_api_url(api_type)
+    api_type_upper = normalize_text(api_type).upper()
+
+    if api_type_upper in ["ITEMS", "ITEM_LIST", "STAT_ITEM_LIST"] and not statbl_id:
+        raise HTTPException(status_code=400, detail="ITEMS 조회에는 STATBL_ID가 필요합니다.")
+
+    if api_type_upper in ["DATA", "STAT_DATA"]:
+        if not statbl_id or not dtacycle_cd:
+            raise HTTPException(status_code=400, detail="DATA 조회에는 STATBL_ID와 DTACYCLE_CD가 필요합니다.")
+
+    params = {
+        "pIndex": pIndex,
+        "pSize": pSize,
+        "STATBL_ID": statbl_id,
+        "DTACYCLE_CD": dtacycle_cd,
+        "WRTTIME_IDTFR_ID": wrttime_idtfr_id,
+        "GRP_ID": grp_id,
+        "CLS_ID": cls_id,
+        "ITM_ID": itm_id,
+        "START_WRTTIME": start_wrttime,
+        "END_WRTTIME": end_wrttime,
+    }
+
+    return {
+        "api_type": api_type_upper,
+        **call_reb_api(api_url, params=params, response_type=response_type),
+    }
 
 
 
