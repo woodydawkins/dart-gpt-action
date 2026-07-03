@@ -15,7 +15,7 @@ load_dotenv()
 
 app = FastAPI(
     title="DART·KRX·NTS·LAW·FSC·FSC_FIN·REB·BOK·NTS_ASSET_VALUE Disclosure & Market Research API",
-    version="1.13.2-fixed",
+    version="1.13.3",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
         "Korea Law Open API, NTS Business Registration API, and FSC company information APIs. It supports DART-registered companies, including listed and non-listed disclosure companies, "
@@ -343,6 +343,7 @@ def debug_env():
         "has_fsc_fin_summary_url": bool(FSC_FIN_SUMMARY_URL),
         "has_fsc_fin_balance_sheet_url": bool(FSC_FIN_BALANCE_SHEET_URL),
         "has_fsc_fin_income_statement_url": bool(FSC_FIN_INCOME_STATEMENT_URL),
+        "fsc_fin_income_statement_url": FSC_FIN_INCOME_STATEMENT_URL,
         "fsc_fin_param_page_no": FSC_FIN_PARAM_PAGE_NO,
         "fsc_fin_param_num_of_rows": FSC_FIN_PARAM_NUM_OF_ROWS,
         "fsc_fin_param_result_type": FSC_FIN_PARAM_RESULT_TYPE,
@@ -1824,6 +1825,92 @@ def call_fsc_fin_api(api_url: str, params: dict[str, Any]) -> dict[str, Any]:
     return parse_fsc_response(res)
 
 
+def fsc_fin_income_statement_url_candidates(api_url: Optional[str] = None) -> list[str]:
+    """
+    손익계산서조회 URL 후보 목록을 반환합니다.
+    일부 Render 환경변수에 잘못된 URL이 들어가면 기본 URL 후보로 fallback합니다.
+    """
+    candidates = [
+        normalize_text(api_url),
+        normalize_text(FSC_FIN_INCOME_STATEMENT_URL),
+        f"{FSC_FIN_BASE_SERVICE_URL}/getIncoStat_V2",
+        f"{FSC_FIN_BASE_SERVICE_URL}/getIncoStat",
+        f"{FSC_FIN_BASE_SERVICE_URL}/getIncoStatInfo_V2",
+    ]
+
+    # 공공데이터 문서에는 http 예시도 존재하므로 404 디버깅용 fallback 후보에 포함합니다.
+    http_base = FSC_FIN_BASE_SERVICE_URL.replace("https://", "http://")
+    candidates.extend([
+        f"{http_base}/getIncoStat_V2",
+        f"{http_base}/getIncoStat",
+    ])
+
+    unique: list[str] = []
+    seen = set()
+    for url in candidates:
+        if url and url not in seen:
+            unique.append(url)
+            seen.add(url)
+    return unique
+
+
+def call_fsc_fin_api_with_fallback(api_urls: list[str], params: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    금융위원회 기업 재무정보 API를 여러 URL 후보로 순차 호출합니다.
+    주로 손익계산서조회 404 Not Found 원인 파악 및 URL fallback에 사용합니다.
+    """
+    if not api_urls:
+        raise HTTPException(
+            status_code=500,
+            detail="FSC 기업 재무정보 API URL 후보가 없습니다."
+        )
+
+    clean_params = {
+        key: value
+        for key, value in params.items()
+        if value is not None and str(value).strip() != ""
+    }
+    clean_params["serviceKey"] = require_fsc_fin_service_key()
+    clean_params.setdefault(FSC_FIN_PARAM_RESULT_TYPE, FSC_FIN_RESULT_TYPE_VALUE)
+
+    attempts = []
+    last_error = None
+
+    for candidate_url in api_urls:
+        try:
+            res = requests.get(candidate_url, params=clean_params, timeout=30)
+            attempts.append({
+                "url": candidate_url,
+                "status_code": res.status_code,
+                "content_type": res.headers.get("content-type"),
+                "ok": 200 <= res.status_code < 300,
+            })
+            res.raise_for_status()
+            data = parse_fsc_response(res)
+            return data, {
+                "selected_url": candidate_url,
+                "attempts": attempts,
+                "fallback_used": candidate_url != api_urls[0],
+            }
+        except requests.RequestException as e:
+            last_error = e
+            continue
+
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "message": "FSC 기업 재무정보 API 요청 실패: 모든 URL 후보가 실패했습니다.",
+            "last_error": str(last_error),
+            "attempts": attempts,
+            "hint": (
+                "손익계산서조회는 공공데이터 문서상 getIncoStat_V2입니다. "
+                "Render 환경변수 FSC_FIN_INCOME_STATEMENT_URL이 잘못 설정되어 있으면 삭제하거나 "
+                "https://apis.data.go.kr/1160100/service/GetFinaStatInfoService_V2/getIncoStat_V2 로 설정하세요."
+            ),
+        }
+    )
+
+
 def normalize_fsc_financial_item(item: dict[str, Any]) -> dict[str, Any]:
     """
     금융위원회 기업 재무정보 응답을 느슨하게 표준화합니다.
@@ -1838,12 +1925,23 @@ def normalize_fsc_financial_item(item: dict[str, Any]) -> dict[str, Any]:
         "corporate_registration_number": pick_first(item, "crno", "법인등록번호"),
         "business_registration_number": pick_first(item, "bzno", "bzrno", "brno", "사업자등록번호"),
         "company_name": pick_first(item, "corpNm", "fnccmpNm", "enpNm", "기업명", "회사명"),
-        "financial_statement_type": pick_first(item, "fsDiv", "fsNm", "stmtType", "재무제표구분", "재무제표명"),
-        "account_name": pick_first(item, "accountNm", "acntNm", "acctNm", "계정과목명", "계정명"),
-        "account_code": pick_first(item, "accountCd", "acntCd", "acctCd", "계정과목코드"),
-        "current_amount": pick_first(item, "thstrmAmt", "curAmt", "thisTermAmt", "당기금액", "금액"),
-        "previous_amount": pick_first(item, "frmtrmAmt", "prevAmt", "formerTermAmt", "전기금액"),
-        "before_previous_amount": pick_first(item, "bfefrmtrmAmt", "beforeFormerTermAmt", "전전기금액"),
+        "financial_statement_type": pick_first(item, "fnclDcdNm", "fnclDcd", "fsDiv", "fsNm", "stmtType", "재무제표구분", "재무제표명"),
+        "account_name": pick_first(item, "acitNm", "accountNm", "acntNm", "acctNm", "계정과목명", "계정명"),
+        "account_code": pick_first(item, "acitId", "accountCd", "acntCd", "acctCd", "계정과목코드"),
+        "current_amount": pick_first(item, "crtmAcitAmt", "enpSaleAmt", "thstrmAmt", "curAmt", "thisTermAmt", "당기금액", "금액"),
+        "previous_amount": pick_first(item, "pvtrAcitAmt", "frmtrmAmt", "prevAmt", "formerTermAmt", "전기금액"),
+        "before_previous_amount": pick_first(item, "bpvtrAcitAmt", "bfefrmtrmAmt", "beforeFormerTermAmt", "전전기금액"),
+        "quarter_amount": pick_first(item, "thqrAcitAmt"),
+        "previous_quarter_amount": pick_first(item, "lsqtAcitAmt"),
+        "revenue": pick_first(item, "enpSaleAmt"),
+        "operating_profit": pick_first(item, "enpBzopPft"),
+        "pre_tax_profit": pick_first(item, "iclsPalClcAmt"),
+        "net_income": pick_first(item, "enpCrtmNpf"),
+        "total_assets": pick_first(item, "enpTastAmt"),
+        "total_liabilities": pick_first(item, "enpTdbtAmt"),
+        "total_equity": pick_first(item, "enpTcptAmt"),
+        "capital": pick_first(item, "enpCptlAmt"),
+        "debt_ratio": pick_first(item, "fnclDebtRto"),
         "currency": pick_first(item, "curCd", "currency", "통화"),
         "raw": item,
     }
@@ -2232,7 +2330,15 @@ def build_fsc_financial_response(
         num_of_rows=effective_num_of_rows,
     )
 
-    data = call_fsc_fin_api(api_url, params)
+    if api_type == "INCOME_STATEMENT":
+        data, api_call_status = call_fsc_fin_api_with_fallback(
+            fsc_fin_income_statement_url_candidates(api_url),
+            params,
+        )
+    else:
+        data = call_fsc_fin_api(api_url, params)
+        api_call_status = {"selected_url": api_url, "attempts": [{"url": api_url, "status_code": 200, "ok": True}], "fallback_used": False}
+
     items = extract_public_data_items(data)
     normalized_items = [normalize_fsc_financial_item(item) for item in items]
     matched_items, excluded_items, matching_summary = filter_fsc_financials_by_identity(normalized_items, identity)
@@ -2282,6 +2388,7 @@ def build_fsc_financial_response(
         "resolved_identity": identity,
         "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
         "api_result": get_public_data_result(data),
+        "api_call_status": api_call_status,
         "matching_summary": matching_summary,
         "period_summary": period_summary_final,
         "all_matched_period_summary": period_summary_all_matched,
