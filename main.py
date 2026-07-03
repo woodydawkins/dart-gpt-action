@@ -14,7 +14,7 @@ load_dotenv()
 
 app = FastAPI(
     title="DART·KRX·NTS·LAW·FSC·FSC_FIN·REB·BOK·NTS_ASSET_VALUE Disclosure & Market Research API",
-    version="1.13.0",
+    version="1.13.1",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
         "Korea Law Open API, NTS Business Registration API, and FSC company information APIs. It supports DART-registered companies, including listed and non-listed disclosure companies, "
@@ -1835,7 +1835,7 @@ def normalize_fsc_financial_item(item: dict[str, Any]) -> dict[str, Any]:
         "base_date": pick_first(item, "basDt", "baseDate", "기준일자"),
         "business_year": pick_first(item, "bizYear", "bsnsYear", "사업연도", "회계연도"),
         "corporate_registration_number": pick_first(item, "crno", "법인등록번호"),
-        "business_registration_number": pick_first(item, "bzno", "사업자등록번호"),
+        "business_registration_number": pick_first(item, "bzno", "bzrno", "brno", "사업자등록번호"),
         "company_name": pick_first(item, "corpNm", "fnccmpNm", "enpNm", "기업명", "회사명"),
         "financial_statement_type": pick_first(item, "fsDiv", "fsNm", "stmtType", "재무제표구분", "재무제표명"),
         "account_name": pick_first(item, "accountNm", "acntNm", "acctNm", "계정과목명", "계정명"),
@@ -1845,6 +1845,281 @@ def normalize_fsc_financial_item(item: dict[str, Any]) -> dict[str, Any]:
         "before_previous_amount": pick_first(item, "bfefrmtrmAmt", "beforeFormerTermAmt", "전전기금액"),
         "currency": pick_first(item, "curCd", "currency", "통화"),
         "raw": item,
+    }
+
+
+def normalize_match_name(value: Any) -> str:
+    """회사명 비교용 정규화. 공백과 일부 법인 표기를 제거합니다."""
+    text = normalize_text(value)
+    for token in ["주식회사", "(주)", "㈜", "유한회사", " "]:
+        text = text.replace(token, "")
+    return text.lower()
+
+
+def is_zero_like_identifier(value: Any) -> bool:
+    """0000000000000처럼 0으로만 이루어진 식별자는 유효한 회사 식별자로 보지 않습니다."""
+    text = normalize_text(value)
+    return text != "" and set(text) == {"0"}
+
+
+def select_best_fsc_overview_company(companies: list[Any], company_name: Optional[str]) -> Optional[dict[str, Any]]:
+    """금융위 기업개요 후보 중 회사명 기준으로 가장 적절한 1건을 선택합니다."""
+    normalized_companies = [c for c in companies if isinstance(c, dict)]
+    if not normalized_companies:
+        return None
+
+    q = normalize_match_name(company_name)
+    if not q:
+        return normalized_companies[0]
+
+    for company in normalized_companies:
+        name = normalize_match_name(company.get("company_name"))
+        if name == q:
+            return company
+
+    for company in normalized_companies:
+        name = normalize_match_name(company.get("company_name"))
+        if q and (q in name or name in q):
+            return company
+
+    return normalized_companies[0]
+
+
+def resolve_fsc_financial_lookup_identity(
+    company_name: Optional[str],
+    corporate_registration_number: Optional[str],
+    business_registration_number: Optional[str],
+    base_date: Optional[str],
+) -> dict[str, Any]:
+    """
+    FSC 재무정보 조회 전 회사명만 입력된 경우 금융위 기업개요를 통해 crno/bzno를 보강합니다.
+    재무정보 API 결과 검증에 사용할 resolved identity를 반환합니다.
+    """
+    requested_company_name = normalize_text(company_name)
+    requested_crno = normalize_corporate_registration_number(corporate_registration_number)
+    requested_bzno = normalize_business_number(business_registration_number)
+
+    identity = {
+        "input_company_name": requested_company_name,
+        "input_corporate_registration_number": requested_crno,
+        "input_business_registration_number": requested_bzno,
+        "resolved_company_name": requested_company_name,
+        "resolved_corporate_registration_number": requested_crno,
+        "resolved_business_registration_number": requested_bzno,
+        "resolution_source": "input",
+        "resolution_status": "not_needed" if (requested_crno or requested_bzno) else "not_attempted",
+        "overview_match": None,
+        "overview_error": None,
+    }
+
+    if requested_company_name and not requested_crno and not requested_bzno:
+        try:
+            overview = fsc_company_overview(
+                company_name=requested_company_name,
+                corporate_registration_number=None,
+                business_registration_number=None,
+                base_date=base_date,
+                page_no=1,
+                num_of_rows=10,
+            )
+            companies = overview.get("companies") or []
+            selected = select_best_fsc_overview_company(companies, requested_company_name)
+            if selected:
+                resolved_crno = normalize_corporate_registration_number(selected.get("corporate_registration_number"))
+                resolved_bzno = normalize_business_number(selected.get("business_registration_number"))
+                resolved_name = normalize_text(selected.get("company_name")) or requested_company_name
+                identity.update({
+                    "resolved_company_name": resolved_name,
+                    "resolved_corporate_registration_number": resolved_crno,
+                    "resolved_business_registration_number": resolved_bzno,
+                    "resolution_source": "fsc_company_overview",
+                    "resolution_status": "resolved" if (resolved_crno or resolved_bzno or resolved_name) else "no_identifier_found",
+                    "overview_match": {
+                        "company_name": resolved_name,
+                        "corporate_registration_number": resolved_crno,
+                        "business_registration_number": resolved_bzno,
+                        "representative": selected.get("representative"),
+                        "address": selected.get("address"),
+                        "fiscal_year_end_month": selected.get("fiscal_year_end_month"),
+                    }
+                })
+            else:
+                identity["resolution_status"] = "not_found"
+        except HTTPException as e:
+            identity["resolution_status"] = "error"
+            identity["overview_error"] = e.detail
+
+    return identity
+
+
+def fsc_financial_row_match_decision(item: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
+    """FSC 재무정보 row가 요청 회사 식별값과 매칭되는지 판단합니다."""
+    raw = item.get("raw") or item
+
+    row_crno = normalize_corporate_registration_number(
+        item.get("corporate_registration_number") or raw.get("crno")
+    )
+    row_bzno = normalize_business_number(
+        item.get("business_registration_number") or raw.get("bzno") or raw.get("bzrno") or raw.get("brno")
+    )
+    row_company_name = normalize_text(
+        item.get("company_name") or raw.get("corpNm") or raw.get("fnccmpNm") or raw.get("enpNm")
+    )
+
+    requested_crno = normalize_corporate_registration_number(identity.get("resolved_corporate_registration_number"))
+    requested_bzno = normalize_business_number(identity.get("resolved_business_registration_number"))
+    requested_name = normalize_text(identity.get("resolved_company_name") or identity.get("input_company_name"))
+
+    if is_zero_like_identifier(row_crno):
+        return {
+            "matched": False,
+            "reason": "invalid_zero_crno",
+            "row_crno": row_crno,
+            "row_bzno": row_bzno,
+            "row_company_name": row_company_name,
+        }
+
+    if requested_crno:
+        if row_crno and row_crno == requested_crno:
+            return {"matched": True, "reason": "crno_matched", "row_crno": row_crno, "row_bzno": row_bzno, "row_company_name": row_company_name}
+        if row_crno and row_crno != requested_crno:
+            return {"matched": False, "reason": "crno_mismatch", "row_crno": row_crno, "row_bzno": row_bzno, "row_company_name": row_company_name}
+
+    if requested_bzno:
+        if row_bzno and row_bzno == requested_bzno:
+            return {"matched": True, "reason": "bzno_matched", "row_crno": row_crno, "row_bzno": row_bzno, "row_company_name": row_company_name}
+        if row_bzno and row_bzno != requested_bzno:
+            return {"matched": False, "reason": "bzno_mismatch", "row_crno": row_crno, "row_bzno": row_bzno, "row_company_name": row_company_name}
+
+    if requested_name and row_company_name:
+        req = normalize_match_name(requested_name)
+        row = normalize_match_name(row_company_name)
+        if req == row or req in row or row in req:
+            return {"matched": True, "reason": "company_name_matched", "row_crno": row_crno, "row_bzno": row_bzno, "row_company_name": row_company_name}
+        return {"matched": False, "reason": "company_name_mismatch", "row_crno": row_crno, "row_bzno": row_bzno, "row_company_name": row_company_name}
+
+    if not row_crno and not row_bzno and not row_company_name:
+        return {
+            "matched": False,
+            "reason": "row_has_no_identifier",
+            "row_crno": row_crno,
+            "row_bzno": row_bzno,
+            "row_company_name": row_company_name,
+        }
+
+    return {
+        "matched": False,
+        "reason": "unable_to_verify_identity",
+        "row_crno": row_crno,
+        "row_bzno": row_bzno,
+        "row_company_name": row_company_name,
+    }
+
+
+def filter_fsc_financials_by_identity(financials: list[dict[str, Any]], identity: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """FSC 재무정보를 대상 회사와 매칭되는 행/제외 행으로 분리합니다."""
+    matched: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    reason_counts: dict[str, int] = {}
+
+    for item in financials:
+        decision = fsc_financial_row_match_decision(item, identity)
+        item_with_match = {**item, "match_validation": decision}
+        reason = decision.get("reason") or "unknown"
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        if decision.get("matched"):
+            matched.append(item_with_match)
+        else:
+            excluded.append(item_with_match)
+
+    if matched:
+        status = "matched"
+        message = "FSC 기업 재무정보가 요청 회사 식별값과 매칭되었습니다."
+    elif financials:
+        status = "failed"
+        message = "FSC 기업 재무정보 API 호출은 성공했으나 요청 회사 식별값과 매칭되는 재무정보가 없습니다."
+    else:
+        status = "no_data"
+        message = "FSC 기업 재무정보 API에서 재무정보 행이 반환되지 않았습니다."
+
+    summary = {
+        "status": status,
+        "message": message,
+        "total_count": len(financials),
+        "matched_count": len(matched),
+        "excluded_count": len(excluded),
+        "excluded_reason_counts": reason_counts,
+        "strict_identity_matching": True,
+        "note": (
+            "법인등록번호가 0000000000000이거나 회사명이 비어 있는 행은 대상 회사 재무정보로 확정하지 않습니다. "
+            "매칭 실패 시 DART 재무제표 또는 감사보고서 원문 확인을 우선하세요."
+        ),
+    }
+    return matched, excluded, summary
+
+
+def build_fsc_financial_response(
+    api_type: str,
+    company_name: Optional[str],
+    corporate_registration_number: Optional[str],
+    business_registration_number: Optional[str],
+    base_date: Optional[str],
+    page_no: int,
+    num_of_rows: int,
+    api_url: str,
+    result_key: str,
+    result_label: str,
+) -> dict[str, Any]:
+    """FSC 기업 재무정보 endpoint 공통 응답 생성. 조회 전 식별자 보강 및 조회 후 매칭 검증을 수행합니다."""
+    require_fsc_lookup_key(company_name, corporate_registration_number, business_registration_number)
+
+    identity = resolve_fsc_financial_lookup_identity(
+        company_name=company_name,
+        corporate_registration_number=corporate_registration_number,
+        business_registration_number=business_registration_number,
+        base_date=base_date,
+    )
+
+    resolved_crno = identity.get("resolved_corporate_registration_number") or corporate_registration_number
+    resolved_bzno = identity.get("resolved_business_registration_number") or business_registration_number
+    resolved_name = identity.get("resolved_company_name") or company_name
+
+    # 재무정보 API는 회사명 필터가 느슨하게 동작할 수 있으므로 crno/bzno를 우선 사용하고,
+    # 회사명은 보조 파라미터로 함께 전달합니다.
+    params = build_fsc_fin_params(
+        base_date=base_date,
+        corporate_registration_number=resolved_crno,
+        business_registration_number=resolved_bzno,
+        company_name=resolved_name,
+        page_no=page_no,
+        num_of_rows=num_of_rows,
+    )
+
+    data = call_fsc_fin_api(api_url, params)
+    items = extract_public_data_items(data)
+    normalized_items = [normalize_fsc_financial_item(item) for item in items]
+    matched_items, excluded_items, matching_summary = filter_fsc_financials_by_identity(normalized_items, identity)
+
+    return {
+        "api_type": api_type,
+        "company_name": company_name,
+        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
+        "business_registration_number": normalize_business_number(business_registration_number),
+        "base_date": normalize_fsc_base_date(base_date),
+        "resolved_identity": identity,
+        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
+        "api_result": get_public_data_result(data),
+        "matching_summary": matching_summary,
+        "count": len(matched_items),
+        result_key: matched_items,
+        "excluded_count": len(excluded_items),
+        "excluded_items_sample": excluded_items[:20],
+        "raw": data,
+        "note": (
+            f"금융위원회 기업 재무정보 API의 {result_label} 결과입니다. "
+            "반환 행은 금융위 기업기본정보 또는 입력 식별값과 매칭되는 경우에만 결과 목록에 포함됩니다. "
+            "감사·실사 목적에서는 DART 재무제표 또는 감사보고서 원문과 대조하세요."
+        ),
     }
 
 
@@ -1859,36 +2134,20 @@ def fsc_financial_summary(
 ):
     """
     금융위원회 기업 재무정보 API - 요약재무제표조회.
+    조회 전 회사 식별자를 보강하고, 반환 행이 대상 회사와 매칭되는지 검증합니다.
     """
-    params = build_fsc_fin_params(
-        base_date=base_date,
+    return build_fsc_financial_response(
+        api_type="SUMMARY",
+        company_name=company_name,
         corporate_registration_number=corporate_registration_number,
         business_registration_number=business_registration_number,
-        company_name=company_name,
+        base_date=base_date,
         page_no=page_no,
         num_of_rows=num_of_rows,
+        api_url=FSC_FIN_SUMMARY_URL,
+        result_key="financials",
+        result_label="요약재무제표조회",
     )
-
-    data = call_fsc_fin_api(FSC_FIN_SUMMARY_URL, params)
-    items = extract_public_data_items(data)
-    financials = [normalize_fsc_financial_item(item) for item in items]
-
-    return {
-        "api_type": "SUMMARY",
-        "company_name": company_name,
-        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
-        "business_registration_number": normalize_business_number(business_registration_number),
-        "base_date": normalize_fsc_base_date(base_date),
-        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
-        "api_result": get_public_data_result(data),
-        "count": len(financials),
-        "financials": financials,
-        "raw": data,
-        "note": (
-            "금융위원회 기업 재무정보 API의 요약재무제표조회 결과입니다. "
-            "감사·실사 목적에서는 DART 재무제표 원문과 대조하세요."
-        ),
-    }
 
 
 @app.get("/fsc/financial/balance-sheet")
@@ -1902,36 +2161,20 @@ def fsc_financial_balance_sheet(
 ):
     """
     금융위원회 기업 재무정보 API - 재무상태표조회.
+    조회 전 회사 식별자를 보강하고, 반환 행이 대상 회사와 매칭되는지 검증합니다.
     """
-    params = build_fsc_fin_params(
-        base_date=base_date,
+    return build_fsc_financial_response(
+        api_type="BALANCE_SHEET",
+        company_name=company_name,
         corporate_registration_number=corporate_registration_number,
         business_registration_number=business_registration_number,
-        company_name=company_name,
+        base_date=base_date,
         page_no=page_no,
         num_of_rows=num_of_rows,
+        api_url=FSC_FIN_BALANCE_SHEET_URL,
+        result_key="accounts",
+        result_label="재무상태표조회",
     )
-
-    data = call_fsc_fin_api(FSC_FIN_BALANCE_SHEET_URL, params)
-    items = extract_public_data_items(data)
-    accounts = [normalize_fsc_financial_item(item) for item in items]
-
-    return {
-        "api_type": "BALANCE_SHEET",
-        "company_name": company_name,
-        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
-        "business_registration_number": normalize_business_number(business_registration_number),
-        "base_date": normalize_fsc_base_date(base_date),
-        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
-        "api_result": get_public_data_result(data),
-        "count": len(accounts),
-        "accounts": accounts,
-        "raw": data,
-        "note": (
-            "금융위원회 기업 재무정보 API의 재무상태표조회 결과입니다. "
-            "계정과목명·금액은 DART 공시 원문과 대조하세요."
-        ),
-    }
 
 
 @app.get("/fsc/financial/income-statement")
@@ -1945,36 +2188,20 @@ def fsc_financial_income_statement(
 ):
     """
     금융위원회 기업 재무정보 API - 손익계산서조회.
+    조회 전 회사 식별자를 보강하고, 반환 행이 대상 회사와 매칭되는지 검증합니다.
     """
-    params = build_fsc_fin_params(
-        base_date=base_date,
+    return build_fsc_financial_response(
+        api_type="INCOME_STATEMENT",
+        company_name=company_name,
         corporate_registration_number=corporate_registration_number,
         business_registration_number=business_registration_number,
-        company_name=company_name,
+        base_date=base_date,
         page_no=page_no,
         num_of_rows=num_of_rows,
+        api_url=FSC_FIN_INCOME_STATEMENT_URL,
+        result_key="accounts",
+        result_label="손익계산서조회",
     )
-
-    data = call_fsc_fin_api(FSC_FIN_INCOME_STATEMENT_URL, params)
-    items = extract_public_data_items(data)
-    accounts = [normalize_fsc_financial_item(item) for item in items]
-
-    return {
-        "api_type": "INCOME_STATEMENT",
-        "company_name": company_name,
-        "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
-        "business_registration_number": normalize_business_number(business_registration_number),
-        "base_date": normalize_fsc_base_date(base_date),
-        "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
-        "api_result": get_public_data_result(data),
-        "count": len(accounts),
-        "accounts": accounts,
-        "raw": data,
-        "note": (
-            "금융위원회 기업 재무정보 API의 손익계산서조회 결과입니다. "
-            "매출액·영업손익 등 주요 수치는 DART 원문과 대조하세요."
-        ),
-    }
 
 
 @app.get("/fsc/financial/raw")
@@ -1989,6 +2216,7 @@ def fsc_financial_raw(
 ):
     """
     금융위원회 기업 재무정보 API 응답 구조 확인용 raw endpoint.
+    매칭 검증 전 원시 응답 확인에 사용합니다.
     """
     api_type_upper = normalize_text(api_type).upper()
 
@@ -2016,6 +2244,7 @@ def fsc_financial_raw(
 
     data = call_fsc_fin_api(api_url, params)
     items = extract_public_data_items(data)
+    normalized_items = [normalize_fsc_financial_item(item) for item in items]
 
     return {
         "api_type": api_type_upper,
@@ -2023,9 +2252,9 @@ def fsc_financial_raw(
         "api_result": get_public_data_result(data),
         "item_count": len(items),
         "sample_items": items[:5],
+        "sample_normalized_items": normalized_items[:5],
         "raw": data,
     }
-
 
 
 # =========================================================
