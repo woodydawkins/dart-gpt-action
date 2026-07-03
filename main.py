@@ -15,7 +15,7 @@ load_dotenv()
 
 app = FastAPI(
     title="DART·KRX·NTS·LAW·FSC·FSC_FIN·REB·BOK·NTS_ASSET_VALUE Disclosure & Market Research API",
-    version="1.13.2",
+    version="1.13.2-fixed",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
         "Korea Law Open API, NTS Business Registration API, and FSC company information APIs. It supports DART-registered companies, including listed and non-listed disclosure companies, "
@@ -1455,8 +1455,6 @@ def fsc_company_overview(
     corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
     business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
     base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
-    business_year: Optional[str] = Query(None, description="사업연도 YYYY. 예: 2025"),
-    latest_only: bool = Query(False, description="True이면 요청 사업연도 미입력 시 최신 사업연도 행만 반환"),
     page_no: int = Query(1, ge=1, description="페이지 번호"),
     num_of_rows: int = Query(10, ge=1, le=100, description="한 페이지 결과 수")
 ):
@@ -2310,6 +2308,8 @@ def fsc_financial_summary(
     corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
     business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
     base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    business_year: Optional[str] = Query(None, description="사업연도 YYYY. 예: 2025"),
+    latest_only: bool = Query(False, description="True이면 요청 사업연도 미입력 시 최신 사업연도 행만 반환"),
     page_no: int = Query(1, ge=1, description="페이지 번호"),
     num_of_rows: int = Query(10, ge=1, le=100, description="한 페이지 결과 수")
 ):
