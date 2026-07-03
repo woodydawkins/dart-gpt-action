@@ -2,6 +2,7 @@ import os
 import io
 import zipfile
 import requests
+import re
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 from datetime import datetime, timedelta
@@ -14,7 +15,7 @@ load_dotenv()
 
 app = FastAPI(
     title="DART·KRX·NTS·LAW·FSC·FSC_FIN·REB·BOK·NTS_ASSET_VALUE Disclosure & Market Research API",
-    version="1.13.1",
+    version="1.13.2",
     description=(
         "API server for connecting Custom GPT Actions to OpenDART, KRX Open API, "
         "Korea Law Open API, NTS Business Registration API, and FSC company information APIs. It supports DART-registered companies, including listed and non-listed disclosure companies, "
@@ -1454,6 +1455,8 @@ def fsc_company_overview(
     corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
     business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
     base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    business_year: Optional[str] = Query(None, description="사업연도 YYYY. 예: 2025"),
+    latest_only: bool = Query(False, description="True이면 요청 사업연도 미입력 시 최신 사업연도 행만 반환"),
     page_no: int = Query(1, ge=1, description="페이지 번호"),
     num_of_rows: int = Query(10, ge=1, le=100, description="한 페이지 결과 수")
 ):
@@ -1885,6 +1888,129 @@ def select_best_fsc_overview_company(companies: list[Any], company_name: Optiona
     return normalized_companies[0]
 
 
+def extract_year_digits(value: Any) -> str:
+    """
+    사업연도/기준일에서 4자리 연도를 추출합니다.
+    예: 2025, 2025-12-31, 20251231 -> 2025
+    """
+    text = normalize_text(value)
+    match = re.search(r"(19|20)\d{2}", text)
+    return match.group(0) if match else ""
+
+
+def infer_fsc_financial_year(item: dict[str, Any]) -> str:
+    """FSC 재무정보 row의 사업연도를 business_year 또는 base_date에서 추정합니다."""
+    return (
+        extract_year_digits(item.get("business_year"))
+        or extract_year_digits(item.get("base_date"))
+        or extract_year_digits((item.get("raw") or {}).get("bizYear"))
+        or extract_year_digits((item.get("raw") or {}).get("basDt"))
+    )
+
+
+def normalize_optional_year(value: Any) -> str:
+    """사용자가 입력한 사업연도/기준연도 값을 4자리 연도로 보정합니다."""
+    return extract_year_digits(value)
+
+
+def filter_fsc_financials_by_year(
+    financials: list[dict[str, Any]],
+    business_year: Optional[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """
+    매칭된 FSC 재무정보 중 요청 사업연도와 일치하는 row만 선별합니다.
+    business_year가 없으면 전체를 반환합니다.
+    """
+    requested_year = normalize_optional_year(business_year)
+    if not requested_year:
+        return financials, [], {
+            "requested_business_year": None,
+            "year_filter_applied": False,
+            "matched_year_count": len(financials),
+            "excluded_by_year_count": 0,
+        }
+
+    included: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+
+    for item in financials:
+        row_year = infer_fsc_financial_year(item)
+        item_with_year = {**item, "inferred_business_year": row_year}
+        if row_year == requested_year:
+            included.append(item_with_year)
+        else:
+            excluded.append(item_with_year)
+
+    return included, excluded, {
+        "requested_business_year": requested_year,
+        "year_filter_applied": True,
+        "matched_year_count": len(included),
+        "excluded_by_year_count": len(excluded),
+        "message": (
+            "요청 사업연도와 일치하는 FSC 재무정보만 결과에 포함했습니다."
+            if included else
+            "회사 식별값은 매칭되었으나 요청 사업연도와 일치하는 FSC 재무정보는 확인되지 않았습니다."
+        ),
+    }
+
+
+def summarize_fsc_financial_periods(financials: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    매칭된 FSC 재무정보의 사업연도/기준일 분포와 최신연도 row를 요약합니다.
+    GPT가 첫 페이지 일부 기간만 보고 최신 자료가 없다고 오판하지 않도록 보조 메타데이터를 제공합니다.
+    """
+    years: set[str] = set()
+    base_dates: set[str] = set()
+
+    for item in financials:
+        year = infer_fsc_financial_year(item)
+        if year:
+            years.add(year)
+        base_date = normalize_text(item.get("base_date"))
+        if base_date:
+            base_dates.add(base_date)
+
+    sorted_years = sorted(years)
+    latest_year = sorted_years[-1] if sorted_years else None
+
+    latest_items = []
+    if latest_year:
+        latest_items = [
+            {**item, "inferred_business_year": infer_fsc_financial_year(item)}
+            for item in financials
+            if infer_fsc_financial_year(item) == latest_year
+        ]
+
+    return {
+        "available_business_years": sorted_years,
+        "latest_business_year": latest_year,
+        "available_base_dates": sorted(base_dates),
+        "latest_items_count": len(latest_items),
+        "latest_items_sample": latest_items[:20],
+        "note": (
+            "FSC 재무정보는 페이지 기반으로 반환되므로, 최신연도 확인을 위해 서버가 기본 조회 건수를 보정할 수 있습니다. "
+            "요청 사업연도가 명시된 경우 해당 연도와 일치하는 row만 사용하세요."
+        ),
+    }
+
+
+def should_auto_expand_fsc_financial_query(
+    page_no: int,
+    num_of_rows: int,
+    business_year: Optional[str],
+) -> bool:
+    """
+    회사명 조회 시 첫 페이지 10건만 받아 과거연도만 노출되는 문제를 줄이기 위해
+    기본 조회 범위를 안전하게 확장합니다.
+    """
+    if page_no != 1:
+        return False
+    if business_year:
+        return True
+    return num_of_rows < 100
+
+
+
 def resolve_fsc_financial_lookup_identity(
     company_name: Optional[str],
     corporate_registration_number: Optional[str],
@@ -2069,8 +2195,13 @@ def build_fsc_financial_response(
     api_url: str,
     result_key: str,
     result_label: str,
+    business_year: Optional[str] = None,
+    latest_only: bool = False,
 ) -> dict[str, Any]:
-    """FSC 기업 재무정보 endpoint 공통 응답 생성. 조회 전 식별자 보강 및 조회 후 매칭 검증을 수행합니다."""
+    """
+    FSC 기업 재무정보 endpoint 공통 응답 생성.
+    조회 전 식별자 보강, 조회 후 회사 식별값 매칭 검증, 사업연도 필터링 및 최신연도 요약을 수행합니다.
+    """
     require_fsc_lookup_key(company_name, corporate_registration_number, business_registration_number)
 
     identity = resolve_fsc_financial_lookup_identity(
@@ -2084,6 +2215,14 @@ def build_fsc_financial_response(
     resolved_bzno = identity.get("resolved_business_registration_number") or business_registration_number
     resolved_name = identity.get("resolved_company_name") or company_name
 
+    # 재무정보 API가 page=1, numOfRows=10에서 과거연도 일부만 반환하는 경우가 있어
+    # 기본 조회는 내부적으로 최대 100건까지 확장합니다. 요청값은 별도 보존합니다.
+    effective_num_of_rows = (
+        max(num_of_rows, 100)
+        if should_auto_expand_fsc_financial_query(page_no, num_of_rows, business_year)
+        else num_of_rows
+    )
+
     # 재무정보 API는 회사명 필터가 느슨하게 동작할 수 있으므로 crno/bzno를 우선 사용하고,
     # 회사명은 보조 파라미터로 함께 전달합니다.
     params = build_fsc_fin_params(
@@ -2092,7 +2231,7 @@ def build_fsc_financial_response(
         business_registration_number=resolved_bzno,
         company_name=resolved_name,
         page_no=page_no,
-        num_of_rows=num_of_rows,
+        num_of_rows=effective_num_of_rows,
     )
 
     data = call_fsc_fin_api(api_url, params)
@@ -2100,24 +2239,66 @@ def build_fsc_financial_response(
     normalized_items = [normalize_fsc_financial_item(item) for item in items]
     matched_items, excluded_items, matching_summary = filter_fsc_financials_by_identity(normalized_items, identity)
 
+    period_summary_all_matched = summarize_fsc_financial_periods(matched_items)
+
+    year_filtered_items, year_excluded_items, year_filter_summary = filter_fsc_financials_by_year(
+        matched_items,
+        business_year=business_year,
+    )
+
+    final_items = year_filtered_items
+
+    # latest_only=True인 경우 요청연도 필터가 없을 때 최신 사업연도 row만 반환합니다.
+    if latest_only and not normalize_optional_year(business_year):
+        latest_year = period_summary_all_matched.get("latest_business_year")
+        if latest_year:
+            final_items = [
+                {**item, "inferred_business_year": infer_fsc_financial_year(item)}
+                for item in matched_items
+                if infer_fsc_financial_year(item) == latest_year
+            ]
+
+    period_summary_final = summarize_fsc_financial_periods(final_items)
+
+    matching_summary = {
+        **matching_summary,
+        "business_year_filter": year_filter_summary,
+        "effective_num_of_rows": effective_num_of_rows,
+        "requested_num_of_rows": num_of_rows,
+        "auto_expanded_query": effective_num_of_rows != num_of_rows,
+        "latest_only": latest_only,
+    }
+
+    if matched_items and not final_items and normalize_optional_year(business_year):
+        matching_summary["status"] = "year_not_found"
+        matching_summary["message"] = "회사 식별값은 매칭되었으나 요청 사업연도와 일치하는 FSC 재무정보는 확인되지 않았습니다."
+
     return {
         "api_type": api_type,
         "company_name": company_name,
         "corporate_registration_number": normalize_corporate_registration_number(corporate_registration_number),
         "business_registration_number": normalize_business_number(business_registration_number),
         "base_date": normalize_fsc_base_date(base_date),
+        "business_year": normalize_optional_year(business_year),
+        "latest_only": latest_only,
         "resolved_identity": identity,
         "request_params": {k: v for k, v in params.items() if k != "serviceKey"},
         "api_result": get_public_data_result(data),
         "matching_summary": matching_summary,
-        "count": len(matched_items),
-        result_key: matched_items,
+        "period_summary": period_summary_final,
+        "all_matched_period_summary": period_summary_all_matched,
+        "count": len(final_items),
+        result_key: final_items,
+        "matched_total_before_year_filter": len(matched_items),
         "excluded_count": len(excluded_items),
         "excluded_items_sample": excluded_items[:20],
+        "year_excluded_count": len(year_excluded_items),
+        "year_excluded_items_sample": year_excluded_items[:20],
         "raw": data,
         "note": (
             f"금융위원회 기업 재무정보 API의 {result_label} 결과입니다. "
             "반환 행은 금융위 기업기본정보 또는 입력 식별값과 매칭되는 경우에만 결과 목록에 포함됩니다. "
+            "사업연도가 지정된 경우 해당 연도와 일치하는 행만 결과에 포함합니다. "
             "감사·실사 목적에서는 DART 재무제표 또는 감사보고서 원문과 대조하세요."
         ),
     }
@@ -2142,6 +2323,8 @@ def fsc_financial_summary(
         corporate_registration_number=corporate_registration_number,
         business_registration_number=business_registration_number,
         base_date=base_date,
+        business_year=business_year,
+        latest_only=latest_only,
         page_no=page_no,
         num_of_rows=num_of_rows,
         api_url=FSC_FIN_SUMMARY_URL,
@@ -2156,6 +2339,8 @@ def fsc_financial_balance_sheet(
     corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
     business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
     base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    business_year: Optional[str] = Query(None, description="사업연도 YYYY. 예: 2025"),
+    latest_only: bool = Query(False, description="True이면 요청 사업연도 미입력 시 최신 사업연도 행만 반환"),
     page_no: int = Query(1, ge=1, description="페이지 번호"),
     num_of_rows: int = Query(100, ge=1, le=100, description="한 페이지 결과 수")
 ):
@@ -2169,6 +2354,8 @@ def fsc_financial_balance_sheet(
         corporate_registration_number=corporate_registration_number,
         business_registration_number=business_registration_number,
         base_date=base_date,
+        business_year=business_year,
+        latest_only=latest_only,
         page_no=page_no,
         num_of_rows=num_of_rows,
         api_url=FSC_FIN_BALANCE_SHEET_URL,
@@ -2183,6 +2370,8 @@ def fsc_financial_income_statement(
     corporate_registration_number: Optional[str] = Query(None, description="법인등록번호"),
     business_registration_number: Optional[str] = Query(None, description="사업자등록번호"),
     base_date: Optional[str] = Query(None, description="기준일자 YYYYMMDD"),
+    business_year: Optional[str] = Query(None, description="사업연도 YYYY. 예: 2025"),
+    latest_only: bool = Query(False, description="True이면 요청 사업연도 미입력 시 최신 사업연도 행만 반환"),
     page_no: int = Query(1, ge=1, description="페이지 번호"),
     num_of_rows: int = Query(100, ge=1, le=100, description="한 페이지 결과 수")
 ):
@@ -2196,6 +2385,8 @@ def fsc_financial_income_statement(
         corporate_registration_number=corporate_registration_number,
         business_registration_number=business_registration_number,
         base_date=base_date,
+        business_year=business_year,
+        latest_only=latest_only,
         page_no=page_no,
         num_of_rows=num_of_rows,
         api_url=FSC_FIN_INCOME_STATEMENT_URL,
