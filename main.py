@@ -6398,3 +6398,9 @@ def krx_raw(
         "sample_items": items[:5],
         "raw": data
     }
+
+
+# MCP shares the existing lookup implementation and server-side credentials.
+from mcp_bridge import install_mcp
+
+mcp_server = install_mcp(app)

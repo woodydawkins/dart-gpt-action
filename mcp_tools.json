@@ -1,0 +1,2837 @@
+[
+  {
+    "name": "searchCompany",
+    "domain": "core",
+    "method": "GET",
+    "path": "/dart/search-company",
+    "description": "Search DART company information. Use first when the user mentions a Korean company name, DART company, listed company, non-listed disclosure company, or Korean stock code.",
+    "query_parameters": [
+      "query"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Korean company name or stock code, e.g. 삼성전자 or 005930."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getDisclosures",
+    "domain": "core",
+    "method": "GET",
+    "path": "/dart/disclosures",
+    "description": "Get DART disclosure filings. Use for DART filings, recent disclosures, annual reports, quarterly reports, audit reports, major reports, capital increases, CB/BW, major contracts, litigation, contingent liabilities, related parties, subsidiaries, audit opinion, or key audit matters.",
+    "query_parameters": [
+      "company_name",
+      "start_date",
+      "end_date",
+      "page_count"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "company_name": {
+          "type": "string",
+          "description": "Korean company name or stock code."
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Start date in YYYYMMDD format."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date in YYYYMMDD format."
+        },
+        "page_count": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of filings to retrieve."
+        }
+      },
+      "required": [
+        "company_name",
+        "start_date",
+        "end_date"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getFinancials",
+    "domain": "core",
+    "method": "GET",
+    "path": "/dart/financials",
+    "description": "Get DART financial statement data. Use for DART financial statements, revenue, operating profit, net income, assets, liabilities, equity, cash flows, and financial ratios. Prefer DART for listed companies and disclosure companies.",
+    "query_parameters": [
+      "company_name",
+      "year",
+      "report_code"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "company_name": {
+          "type": "string",
+          "description": "Korean company name or stock code."
+        },
+        "year": {
+          "type": "string",
+          "description": "Business year, e.g. 2025."
+        },
+        "report_code": {
+          "type": "string",
+          "enum": [
+            "11011",
+            "11012",
+            "11013",
+            "11014"
+          ],
+          "description": "11011 annual report, 11012 half-year, 11013 Q1, 11014 Q3."
+        }
+      },
+      "required": [
+        "company_name",
+        "year",
+        "report_code"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchKrxStock",
+    "domain": "core",
+    "method": "GET",
+    "path": "/krx/search-stock",
+    "description": "Search KRX stock information. Use when the user asks about Korean stock code, market segment, KOSPI, KOSDAQ, KONEX, ETF, or when company analysis requires KRX market data.",
+    "query_parameters": [
+      "query",
+      "market",
+      "base_date"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Korean company name or stock code."
+        },
+        "market": {
+          "type": "string",
+          "default": "ALL",
+          "enum": [
+            "ALL",
+            "KOSPI",
+            "KOSDAQ",
+            "KONEX"
+          ],
+          "description": "Market segment."
+        },
+        "base_date": {
+          "type": "string",
+          "description": "Base date in YYYYMMDD format."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getKrxDailyPrice",
+    "domain": "core",
+    "method": "GET",
+    "path": "/krx/daily-price",
+    "description": "Get KRX daily price and trading data. Use for Korean stock or ETF share price, close/open/high/low, volume, trading value, market cap, recent stock performance, impairment indicator, fair value, listed peer data, or ETF daily trading data.",
+    "query_parameters": [
+      "stock_code",
+      "start_date",
+      "end_date",
+      "market"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "stock_code": {
+          "type": "string",
+          "description": "Korean stock or ETF code, e.g. 005930."
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Start date in YYYYMMDD format."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date in YYYYMMDD format."
+        },
+        "market": {
+          "type": "string",
+          "default": "AUTO",
+          "enum": [
+            "AUTO",
+            "ALL",
+            "KOSPI",
+            "KOSDAQ",
+            "KONEX",
+            "ETF"
+          ],
+          "description": "Market segment. AUTO tries available markets and returns the first market with matched data."
+        }
+      },
+      "required": [
+        "stock_code",
+        "start_date",
+        "end_date"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getFscCompanyOverview",
+    "domain": "core",
+    "method": "GET",
+    "path": "/fsc/company-overview",
+    "description": "Get FSC company overview. Use for FSC company basic information such as representative, establishment date, industry, main business, corporate registration number, business registration number, auditor, audit opinion, and employee count.",
+    "query_parameters": [
+      "company_name",
+      "corporate_registration_number",
+      "business_registration_number",
+      "base_date",
+      "page_no",
+      "num_of_rows"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "company_name": {
+          "type": "string",
+          "description": "Korean company name, e.g. 삼성전자."
+        },
+        "corporate_registration_number": {
+          "type": "string",
+          "description": "Corporate registration number if available."
+        },
+        "business_registration_number": {
+          "type": "string",
+          "description": "Business registration number if available."
+        },
+        "base_date": {
+          "type": "string",
+          "description": "Base date in YYYYMMDD format if needed."
+        },
+        "page_no": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "num_of_rows": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of rows."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getFscFinancialSummary",
+    "domain": "core",
+    "method": "GET",
+    "path": "/fsc/financial/summary",
+    "description": "Get FSC company financial summary. Use for FSC company financial summary. Use business_year for year-specific lookup or latest_only=true for the latest available matched year. Cross-check important figures with DART.",
+    "query_parameters": [
+      "company_name",
+      "corporate_registration_number",
+      "business_registration_number",
+      "base_date",
+      "business_year",
+      "latest_only",
+      "page_no",
+      "num_of_rows"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "company_name": {
+          "type": "string",
+          "description": "Korean company name, e.g. 삼성전자."
+        },
+        "corporate_registration_number": {
+          "type": "string",
+          "description": "Corporate registration number if available."
+        },
+        "business_registration_number": {
+          "type": "string",
+          "description": "Business registration number if available."
+        },
+        "base_date": {
+          "type": "string",
+          "description": "Base date in YYYYMMDD format if needed."
+        },
+        "business_year": {
+          "type": "string",
+          "description": "Business year in YYYY format, e.g. 2025. Use when the user asks for a specific fiscal year."
+        },
+        "latest_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true and business_year is omitted, return only rows for the latest business year available in matched FSC financial data."
+        },
+        "page_no": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "num_of_rows": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of rows."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getFscFinancialBalanceSheet",
+    "domain": "core",
+    "method": "GET",
+    "path": "/fsc/financial/balance-sheet",
+    "description": "Get FSC company balance sheet data. Use for FSC balance sheet data such as assets, liabilities, and equity. Use business_year for year-specific lookup or latest_only=true for the latest available matched year. Cross-check key amounts with DART financial statements.",
+    "query_parameters": [
+      "company_name",
+      "corporate_registration_number",
+      "business_registration_number",
+      "base_date",
+      "business_year",
+      "latest_only",
+      "page_no",
+      "num_of_rows"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "company_name": {
+          "type": "string",
+          "description": "Korean company name, e.g. 삼성전자."
+        },
+        "corporate_registration_number": {
+          "type": "string",
+          "description": "Corporate registration number if available."
+        },
+        "business_registration_number": {
+          "type": "string",
+          "description": "Business registration number if available."
+        },
+        "base_date": {
+          "type": "string",
+          "description": "Base date in YYYYMMDD format if needed."
+        },
+        "business_year": {
+          "type": "string",
+          "description": "Business year in YYYY format, e.g. 2025. Use when the user asks for a specific fiscal year."
+        },
+        "latest_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true and business_year is omitted, return only rows for the latest business year available in matched FSC financial data."
+        },
+        "page_no": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "num_of_rows": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of rows."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getFscFinancialIncomeStatement",
+    "domain": "core",
+    "method": "GET",
+    "path": "/fsc/financial/income-statement",
+    "description": "Get FSC company income statement data. Use for FSC income statement data such as revenue, operating profit, and net income. Use business_year for year-specific lookup or latest_only=true for the latest available matched year. Cross-check key amounts with DART financial statements.",
+    "query_parameters": [
+      "company_name",
+      "corporate_registration_number",
+      "business_registration_number",
+      "base_date",
+      "business_year",
+      "latest_only",
+      "page_no",
+      "num_of_rows"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "company_name": {
+          "type": "string",
+          "description": "Korean company name, e.g. 삼성전자."
+        },
+        "corporate_registration_number": {
+          "type": "string",
+          "description": "Corporate registration number if available."
+        },
+        "business_registration_number": {
+          "type": "string",
+          "description": "Business registration number if available."
+        },
+        "base_date": {
+          "type": "string",
+          "description": "Base date in YYYYMMDD format if needed."
+        },
+        "business_year": {
+          "type": "string",
+          "description": "Business year in YYYY format, e.g. 2025. Use when the user asks for a specific fiscal year."
+        },
+        "latest_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true and business_year is omitted, return only rows for the latest business year available in matched FSC financial data."
+        },
+        "page_no": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "num_of_rows": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of rows."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchLaw",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/search",
+    "description": "Search Korean laws Use to search Korean laws by law name or full text before retrieving an article/detail.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "sort"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Korean law name or keyword, e.g. 상법, 외부감사법, 자본시장법."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "description": "1=law-name search, 2=full-text search."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "sort": {
+          "type": "string",
+          "default": "lasc",
+          "description": "Sort option such as lasc, ldes, dasc, ddes."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getLawDetail",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/detail",
+    "description": "Get Korean law detail Use when law_id or mst is known and full law/detail or a specific article is needed.",
+    "query_parameters": [
+      "law_id",
+      "mst",
+      "article_no",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_id": {
+          "type": "string",
+          "description": "Law ID from searchLaw."
+        },
+        "mst": {
+          "type": "string",
+          "description": "Law MST/serial number."
+        },
+        "article_no": {
+          "type": "string",
+          "description": "Optional article number, e.g. 18, 18-2."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getLawArticle",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/article",
+    "description": "Get a specific Korean law article Use for non-tax Korean law articles. For tax laws, prefer getTaxLawArticle.",
+    "query_parameters": [
+      "law_name",
+      "article_no",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Korean law name, e.g. 상법, 외부감사법, 자본시장법."
+        },
+        "article_no": {
+          "type": "string",
+          "description": "Article number, e.g. 398, 18-2."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [
+        "law_name",
+        "article_no"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTreaties",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/treaties/search",
+    "description": "Search treaties including tax treaties Use for tax treaties, double tax treaties, withholding treaty rates, dividends, interest, royalties, PE, beneficial owner, LOB, and residence certificate issues.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "cls",
+      "natCd",
+      "sort"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "default": "",
+          "description": "Treaty keyword, country name, or topic. Example: 미국, 일본, 배당, 이중과세."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 2,
+          "description": "1=treaty-name search, 2=full-text search."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "cls": {
+          "type": "integer",
+          "description": "Treaty class. 1=bilateral, 2=multilateral."
+        },
+        "natCd": {
+          "type": "integer",
+          "description": "Country code used by Korea Law API."
+        },
+        "sort": {
+          "type": "string",
+          "default": "lasc",
+          "description": "Sort option."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getTreatyDetail",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/treaties/detail",
+    "description": "Get treaty detail text Use to retrieve treaty text by treaty_id/id, or search by query if ID is unknown.",
+    "query_parameters": [
+      "treaty_id",
+      "id",
+      "query",
+      "language",
+      "chrClsCd",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "treaty_id": {
+          "type": "string",
+          "description": "Treaty ID from searchTreaties."
+        },
+        "id": {
+          "type": "string",
+          "description": "Alternative treaty ID."
+        },
+        "query": {
+          "type": "string",
+          "description": "Treaty keyword if treaty_id is unknown."
+        },
+        "language": {
+          "type": "string",
+          "default": "ko",
+          "enum": [
+            "ko",
+            "en"
+          ],
+          "description": "Treaty text language."
+        },
+        "chrClsCd": {
+          "type": "string",
+          "description": "Optional Korea Law API treaty language code. Overrides language."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchLegalInterpretations",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/interpretations/search",
+    "description": "Search legal interpretations Use for non-tax legal interpretations or 법제처/정부 법령해석례 searches.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "inq",
+      "rpl",
+      "itmno",
+      "regYd",
+      "explYd",
+      "sort",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "default": "",
+          "description": "Search keyword."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 2,
+          "description": "1=title, 2=full-text."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "inq": {
+          "type": "integer",
+          "description": "Inquiry agency code."
+        },
+        "rpl": {
+          "type": "integer",
+          "description": "Reply agency code."
+        },
+        "itmno": {
+          "type": "integer",
+          "description": "Matter number."
+        },
+        "regYd": {
+          "type": "string",
+          "description": "Registration date range, e.g. 20240101~20241231."
+        },
+        "explYd": {
+          "type": "string",
+          "description": "Interpretation date range, e.g. 20240101~20241231."
+        },
+        "sort": {
+          "type": "string",
+          "default": "ddes",
+          "description": "Sort option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getLegalInterpretationDetail",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/interpretations/detail",
+    "description": "Get legal interpretation detail Use to retrieve a legal interpretation by ID or by searching query first.",
+    "query_parameters": [
+      "interpretation_id",
+      "id",
+      "lm",
+      "query",
+      "response_type",
+      "target"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "interpretation_id": {
+          "type": "string",
+          "description": "Interpretation ID."
+        },
+        "id": {
+          "type": "string",
+          "description": "Alternative interpretation ID."
+        },
+        "lm": {
+          "type": "string",
+          "description": "Interpretation title/name."
+        },
+        "query": {
+          "type": "string",
+          "description": "Search query if ID is unknown."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        },
+        "target": {
+          "type": "string",
+          "description": "Optional API target override."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchConstitutionalCases",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/constitutional-cases/search",
+    "description": "Search constitutional court cases Use for constitutional court cases involving tax, property rights, equality, retroactivity, or other legal issues.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "date",
+      "edYd",
+      "nb",
+      "sort",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "default": "",
+          "description": "Search keyword."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 2,
+          "description": "1=title, 2=full-text."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "date": {
+          "type": "string",
+          "description": "Decision/end date YYYYMMDD."
+        },
+        "edYd": {
+          "type": "string",
+          "description": "Decision/end date range, e.g. 20240101~20241231."
+        },
+        "nb": {
+          "type": "string",
+          "description": "Case number."
+        },
+        "sort": {
+          "type": "string",
+          "default": "ddes",
+          "description": "Sort option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getConstitutionalCaseDetail",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/constitutional-cases/detail",
+    "description": "Get constitutional case detail Use to retrieve a constitutional case by ID or by searching query first.",
+    "query_parameters": [
+      "case_id",
+      "id",
+      "lm",
+      "query",
+      "response_type",
+      "target"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "description": "Constitutional case ID."
+        },
+        "id": {
+          "type": "string",
+          "description": "Alternative case ID."
+        },
+        "lm": {
+          "type": "string",
+          "description": "Case name."
+        },
+        "query": {
+          "type": "string",
+          "description": "Search query if ID is unknown."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        },
+        "target": {
+          "type": "string",
+          "description": "Optional API target override."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchLawTerms",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/terms/search",
+    "description": "Search legal terms Use for legal term definitions such as 특수관계인, 거주자, 실질귀속.",
+    "query_parameters": [
+      "query",
+      "display",
+      "page",
+      "sort",
+      "response_type",
+      "target"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Legal term keyword."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "sort": {
+          "type": "string",
+          "default": "lasc",
+          "description": "Sort option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        },
+        "target": {
+          "type": "string",
+          "description": "Optional API target override."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getLawTermDetail",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/terms/detail",
+    "description": "Get legal term detail Use to retrieve legal term detail by ID or by searching query first.",
+    "query_parameters": [
+      "term_id",
+      "id",
+      "query",
+      "response_type",
+      "target"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "term_id": {
+          "type": "string",
+          "description": "Legal term ID."
+        },
+        "id": {
+          "type": "string",
+          "description": "Alternative term ID."
+        },
+        "query": {
+          "type": "string",
+          "description": "Term keyword if ID is unknown."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        },
+        "target": {
+          "type": "string",
+          "description": "Optional API target override."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchRelatedLaws",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/law/related-laws/search",
+    "description": "Search related laws Use to search related laws for a law name, law ID, or MST.",
+    "query_parameters": [
+      "law_name",
+      "law_id",
+      "mst",
+      "query",
+      "display",
+      "page",
+      "response_type",
+      "target"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Law name."
+        },
+        "law_id": {
+          "type": "string",
+          "description": "Law ID."
+        },
+        "mst": {
+          "type": "string",
+          "description": "Law MST/serial number."
+        },
+        "query": {
+          "type": "string",
+          "description": "Search query if law_name is not used."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        },
+        "target": {
+          "type": "string",
+          "description": "Optional API target override."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getTaxLawCatalog",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/laws/catalog",
+    "description": "Get tax law alias catalog Use to get server-side Korean tax law alias/canonical-name catalog. No parameters.",
+    "query_parameters": [],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTaxLaws",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/laws/search",
+    "description": "Search Korean tax laws Use to search Korean tax laws by formal name, alias, or full-text keyword.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "sort",
+      "tax_only"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Tax law name, alias, or keyword, e.g. 법인세법, 조특법, 배당."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "description": "1=law-name, 2=full-text."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "sort": {
+          "type": "string",
+          "default": "lasc",
+          "description": "Sort option."
+        },
+        "tax_only": {
+          "type": "boolean",
+          "default": true,
+          "description": "Filter to tax laws only."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getTaxLawArticle",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/laws/article",
+    "description": "Get a specific Korean tax law article Use before answering Korean tax-law article questions, including 법인세법, 소득세법, 부가가치세법, 상증세법, 조특법, 국세기본법, 국제조세조정법, 지방세법, 관세법.",
+    "query_parameters": [
+      "law_name",
+      "article_no",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Tax law name or alias, e.g. 법인세법, 조특법, 상증세법."
+        },
+        "article_no": {
+          "type": "string",
+          "description": "Article number, e.g. 18, 18-2, 제16조의4."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [
+        "law_name",
+        "article_no"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getTaxLawPackage",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/laws/package",
+    "description": "Get tax law/decree/rule package Use when the user asks to check a tax law together with its enforcement decree and enforcement rule.",
+    "query_parameters": [
+      "law_name"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Tax law name or alias."
+        }
+      },
+      "required": [
+        "law_name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getTaxLawEffectiveArticle",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/laws/effective-article",
+    "description": "Get tax law article by effective date Use for historical/effective-date tax law article lookup.",
+    "query_parameters": [
+      "law_name",
+      "article_no",
+      "effective_date",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Tax law name or alias."
+        },
+        "article_no": {
+          "type": "string",
+          "description": "Article number."
+        },
+        "effective_date": {
+          "type": "string",
+          "description": "Effective/check date in YYYYMMDD."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [
+        "law_name",
+        "article_no",
+        "effective_date"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTaxLawHistory",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/laws/history",
+    "description": "Search tax law history Use for tax law amendment/history lookup.",
+    "query_parameters": [
+      "law_name",
+      "display",
+      "page",
+      "sort",
+      "response_type",
+      "target"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Tax law name or alias."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "sort": {
+          "type": "string",
+          "default": "ddes",
+          "description": "Sort option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        },
+        "target": {
+          "type": "string",
+          "description": "Optional API target override."
+        }
+      },
+      "required": [
+        "law_name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTaxLawArticleHistory",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/laws/article-history",
+    "description": "Search tax law article history Use for amendment history of a specific tax law article.",
+    "query_parameters": [
+      "law_name",
+      "article_no",
+      "start_date",
+      "end_date",
+      "display",
+      "page",
+      "sort",
+      "response_type",
+      "target"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Tax law name or alias."
+        },
+        "article_no": {
+          "type": "string",
+          "description": "Optional article number."
+        },
+        "start_date": {
+          "type": "string",
+          "description": "Start date YYYYMMDD."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "End date YYYYMMDD."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "sort": {
+          "type": "string",
+          "default": "ddes",
+          "description": "Sort option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        },
+        "target": {
+          "type": "string",
+          "description": "Optional API target override."
+        }
+      },
+      "required": [
+        "law_name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "compareTaxLawOldAndNew",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/laws/compare",
+    "description": "Get old/new comparison for tax law Use for tax law old-and-new comparison after amendment.",
+    "query_parameters": [
+      "law_name",
+      "law_id",
+      "mst",
+      "promulgation_date",
+      "promulgation_no",
+      "response_type",
+      "target"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Tax law name or alias."
+        },
+        "law_id": {
+          "type": "string",
+          "description": "Law ID."
+        },
+        "mst": {
+          "type": "string",
+          "description": "Law MST."
+        },
+        "promulgation_date": {
+          "type": "string",
+          "description": "Promulgation date LD YYYYMMDD."
+        },
+        "promulgation_no": {
+          "type": "string",
+          "description": "Promulgation number LN."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        },
+        "target": {
+          "type": "string",
+          "description": "Optional API target override."
+        }
+      },
+      "required": [
+        "law_name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "compareTaxLawThreeWay",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/laws/three-way-compare",
+    "description": "Get three-way comparison for tax law Use for tax law three-way comparison.",
+    "query_parameters": [
+      "law_name",
+      "law_id",
+      "mst",
+      "response_type",
+      "target"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Tax law name or alias."
+        },
+        "law_id": {
+          "type": "string",
+          "description": "Law ID."
+        },
+        "mst": {
+          "type": "string",
+          "description": "Law MST."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        },
+        "target": {
+          "type": "string",
+          "description": "Optional API target override."
+        }
+      },
+      "required": [
+        "law_name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTaxCases",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/cases/search",
+    "description": "Search tax-related court cases Use for tax court cases, Supreme Court cases, precedents, and case law on tax issues.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "org",
+      "curt",
+      "JO",
+      "date",
+      "prncYd",
+      "nb",
+      "datSrcNm",
+      "sort",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "default": "",
+          "description": "Case search keyword."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 2,
+          "description": "1=title, 2=full-text."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "org": {
+          "type": "string",
+          "description": "Court type. Supreme Court=400201, lower courts=400202."
+        },
+        "curt": {
+          "type": "string",
+          "description": "Court name."
+        },
+        "JO": {
+          "type": "string",
+          "description": "Referenced law name."
+        },
+        "date": {
+          "type": "string",
+          "description": "Decision date YYYYMMDD."
+        },
+        "prncYd": {
+          "type": "string",
+          "description": "Decision date range, e.g. 20240101~20241231."
+        },
+        "nb": {
+          "type": "string",
+          "description": "Case number."
+        },
+        "datSrcNm": {
+          "type": "string",
+          "default": "국세법령정보시스템",
+          "description": "Data source."
+        },
+        "sort": {
+          "type": "string",
+          "default": "ddes",
+          "description": "Sort option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getTaxCaseDetail",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/cases/detail",
+    "description": "Get tax case detail Use to retrieve tax case detail by ID or by searching query first.",
+    "query_parameters": [
+      "case_id",
+      "id",
+      "lm",
+      "query",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "description": "Tax case ID."
+        },
+        "id": {
+          "type": "string",
+          "description": "Alternative case ID."
+        },
+        "lm": {
+          "type": "string",
+          "description": "Case name."
+        },
+        "query": {
+          "type": "string",
+          "description": "Search query if ID is unknown."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "HTML",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format. HTML may be required for some NTS case texts."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTaxAppeals",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/appeals/search",
+    "description": "Search tax tribunal decisions Use for 조세심판례, 조세심판원 결정례, 심판청구, 인용/기각 사례, or tax tribunal decisions.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "cls",
+      "date",
+      "dpaYd",
+      "rslYd",
+      "sort",
+      "fields",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "default": "",
+          "description": "Search keyword."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 2,
+          "description": "1=title, 2=full-text."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "cls": {
+          "type": "string",
+          "description": "Decision type/category code."
+        },
+        "date": {
+          "type": "string",
+          "description": "Decision date YYYYMMDD."
+        },
+        "dpaYd": {
+          "type": "string",
+          "description": "Disposition date range."
+        },
+        "rslYd": {
+          "type": "string",
+          "description": "Decision date range."
+        },
+        "sort": {
+          "type": "string",
+          "default": "ddes",
+          "description": "Sort option."
+        },
+        "fields": {
+          "type": "string",
+          "description": "Response fields option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getTaxAppealDetail",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/appeals/detail",
+    "description": "Get tax tribunal decision detail Use to retrieve tax appeal detail by ID or by searching query first.",
+    "query_parameters": [
+      "appeal_id",
+      "id",
+      "lm",
+      "query",
+      "fields",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "appeal_id": {
+          "type": "string",
+          "description": "Tax appeal/tribunal decision ID."
+        },
+        "id": {
+          "type": "string",
+          "description": "Alternative appeal ID."
+        },
+        "lm": {
+          "type": "string",
+          "description": "Decision name."
+        },
+        "query": {
+          "type": "string",
+          "description": "Search query if ID is unknown."
+        },
+        "fields": {
+          "type": "string",
+          "description": "Response fields option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchNtsInterpretations",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/nts-interpretations/search",
+    "description": "Search NTS interpretations Use for 국세청 예규, 서면질의, 사전답변, 유권해석, 질의회신, or NTS interpretation on a tax issue.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "inq",
+      "rpl",
+      "itmno",
+      "explYd",
+      "sort",
+      "fields",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "default": "",
+          "description": "Search keyword."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 2,
+          "description": "1=title, 2=full-text."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "inq": {
+          "type": "integer",
+          "description": "Inquiry agency code."
+        },
+        "rpl": {
+          "type": "integer",
+          "description": "Reply agency code."
+        },
+        "itmno": {
+          "type": "integer",
+          "description": "Matter number."
+        },
+        "explYd": {
+          "type": "string",
+          "description": "Interpretation date range."
+        },
+        "sort": {
+          "type": "string",
+          "default": "ddes",
+          "description": "Sort option."
+        },
+        "fields": {
+          "type": "string",
+          "description": "Response fields option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTaxAdminRules",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/admin-rules/search",
+    "description": "Search tax administrative rules Use for tax-related administrative rules, notices, directives, rulings, and internal rules.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "nw",
+      "org",
+      "knd",
+      "date",
+      "prmlYd",
+      "nb",
+      "sort",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "default": "",
+          "description": "Search keyword."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 2,
+          "description": "1=title, 2=full-text."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "nw": {
+          "type": "integer",
+          "default": 1,
+          "description": "1=current, 2=history."
+        },
+        "org": {
+          "type": "string",
+          "description": "Ministry/agency code."
+        },
+        "knd": {
+          "type": "string",
+          "description": "Rule type code."
+        },
+        "date": {
+          "type": "string",
+          "description": "Promulgation date YYYYMMDD."
+        },
+        "prmlYd": {
+          "type": "string",
+          "description": "Promulgation date range."
+        },
+        "nb": {
+          "type": "string",
+          "description": "Promulgation number."
+        },
+        "sort": {
+          "type": "string",
+          "default": "ddes",
+          "description": "Sort option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getTaxAdminRuleDetail",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/admin-rules/detail",
+    "description": "Get tax administrative rule detail Use to retrieve tax administrative rule detail by ID/LID/name or by searching query first.",
+    "query_parameters": [
+      "rule_id",
+      "lid",
+      "lm",
+      "query",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "rule_id": {
+          "type": "string",
+          "description": "Administrative rule serial ID."
+        },
+        "lid": {
+          "type": "string",
+          "description": "Administrative rule ID."
+        },
+        "lm": {
+          "type": "string",
+          "description": "Administrative rule name."
+        },
+        "query": {
+          "type": "string",
+          "description": "Search query if ID is unknown."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTaxAttachments",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/attachments/search",
+    "description": "Search tax law attachments/forms Use for tax law schedules, forms, 별표, 별지, 서식, and attachments.",
+    "query_parameters": [
+      "query",
+      "search",
+      "display",
+      "page",
+      "org",
+      "mulOrg",
+      "knd",
+      "sort",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "default": "*",
+          "description": "Search keyword."
+        },
+        "search": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 3,
+          "description": "1=attachment/form name, 2=related law, 3=attachment full text."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "org": {
+          "type": "string",
+          "description": "Ministry/agency code."
+        },
+        "mulOrg": {
+          "type": "string",
+          "description": "Multi-agency condition OR/AND."
+        },
+        "knd": {
+          "type": "string",
+          "description": "1=별표, 2=서식, 3=별지, 4=별도, 5=부록."
+        },
+        "sort": {
+          "type": "string",
+          "default": "lasc",
+          "description": "Sort option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTaxTerms",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/terms/search",
+    "description": "Search tax legal terms Use for tax-related legal term definitions such as 특수관계인, 거주자, 실질귀속.",
+    "query_parameters": [
+      "query",
+      "display",
+      "page",
+      "sort",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Tax/legal term keyword."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "sort": {
+          "type": "string",
+          "default": "lasc",
+          "description": "Sort option."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getTaxTermDetail",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/terms/detail",
+    "description": "Get tax legal term detail Use to retrieve tax legal term detail by ID or by searching query first.",
+    "query_parameters": [
+      "term_id",
+      "id",
+      "query",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "term_id": {
+          "type": "string",
+          "description": "Term ID."
+        },
+        "id": {
+          "type": "string",
+          "description": "Alternative term ID."
+        },
+        "query": {
+          "type": "string",
+          "description": "Term keyword if ID is unknown."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchTaxRelatedLaws",
+    "domain": "tax",
+    "method": "GET",
+    "path": "/tax/related-laws/search",
+    "description": "Search related laws for a tax law Use to search related laws for a tax law name, law ID, or MST.",
+    "query_parameters": [
+      "law_name",
+      "law_id",
+      "mst",
+      "display",
+      "page",
+      "response_type"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "law_name": {
+          "type": "string",
+          "description": "Tax law name or alias."
+        },
+        "law_id": {
+          "type": "string",
+          "description": "Law ID."
+        },
+        "mst": {
+          "type": "string",
+          "description": "Law MST."
+        },
+        "display": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of results."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page number."
+        },
+        "response_type": {
+          "type": "string",
+          "default": "JSON",
+          "enum": [
+            "JSON",
+            "XML",
+            "HTML"
+          ],
+          "description": "Response format."
+        }
+      },
+      "required": [
+        "law_name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getBusinessRegistrationStatus",
+    "domain": "entity",
+    "method": "POST",
+    "path": "/nts/business-status",
+    "description": "Check Korean business registration status. Use for Korean business registration number active/suspended/closed status, tax type, closure date, invoice risk, and counterparty review.",
+    "query_parameters": [],
+    "body": true,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "business_numbers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Korean business registration numbers. Hyphens are allowed."
+        }
+      },
+      "required": [
+        "business_numbers"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "validateBusinessRegistration",
+    "domain": "entity",
+    "method": "POST",
+    "path": "/nts/business-validate",
+    "description": "Validate Korean business registration information. Use to validate whether business registration number, opening date, representative name, and optional business information match NTS records.",
+    "query_parameters": [],
+    "body": true,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "businesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "b_no": {
+                "type": "string",
+                "description": "Business registration number."
+              },
+              "start_dt": {
+                "type": "string",
+                "description": "Opening date in YYYYMMDD format."
+              },
+              "p_nm": {
+                "type": "string",
+                "description": "Representative name."
+              },
+              "b_nm": {
+                "type": "string",
+                "description": "Business name."
+              },
+              "corp_no": {
+                "type": "string",
+                "description": "Corporate registration number."
+              },
+              "b_sector": {
+                "type": "string",
+                "description": "Business sector."
+              },
+              "b_type": {
+                "type": "string",
+                "description": "Business type."
+              }
+            },
+            "required": [
+              "b_no",
+              "start_dt",
+              "p_nm"
+            ]
+          }
+        }
+      },
+      "required": [
+        "businesses"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getNtsAssetValueEndpoints",
+    "domain": "entity",
+    "method": "GET",
+    "path": "/nts/asset-value/endpoints",
+    "description": "List available NTS asset value years and endpoints. Use first when the user asks what years are available for NTS commercial building/officetel standard value data.",
+    "query_parameters": [],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getNtsAssetStandardValue",
+    "domain": "entity",
+    "method": "GET",
+    "path": "/nts/asset-value/standard-value",
+    "description": "Get NTS commercial building/officetel standard value. Use for NTS commercial building or officetel standard value lookup by year and optional building/address-related filters. Results are page-based and may require enough per_page/page coverage.",
+    "query_parameters": [
+      "year",
+      "page",
+      "per_page",
+      "endpoint_index",
+      "building_number",
+      "legal_dong_code",
+      "lot_number",
+      "unit_number",
+      "keyword"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "year": {
+          "type": "string",
+          "description": "Base year, e.g. 2020, 2019, 2018."
+        },
+        "page": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page index."
+        },
+        "per_page": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Page size."
+        },
+        "endpoint_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Endpoint index for years with multiple endpoints."
+        },
+        "building_number": {
+          "type": "string",
+          "description": "Commercial building number exact-match server-side filter."
+        },
+        "legal_dong_code": {
+          "type": "string",
+          "description": "Legal dong code exact-match server-side filter."
+        },
+        "lot_number": {
+          "type": "string",
+          "description": "Lot number partial-match server-side filter."
+        },
+        "unit_number": {
+          "type": "string",
+          "description": "Unit number partial-match server-side filter."
+        },
+        "keyword": {
+          "type": "string",
+          "description": "Keyword filter within returned page data."
+        }
+      },
+      "required": [
+        "year"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getRebStatisticTables",
+    "domain": "entity",
+    "method": "GET",
+    "path": "/real-estate/reb/tables",
+    "description": "List Korea Real Estate Board R-ONE statistic tables. Use first for R-ONE real estate statistics to find STATBL_ID before item/data lookup.",
+    "query_parameters": [
+      "STATBL_ID",
+      "pIndex",
+      "pSize"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "STATBL_ID": {
+          "type": "string",
+          "description": "Statistic table ID. Optional."
+        },
+        "pIndex": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page index."
+        },
+        "pSize": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Page size."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getRebStatisticItems",
+    "domain": "entity",
+    "method": "GET",
+    "path": "/real-estate/reb/items",
+    "description": "List items for a Korea Real Estate Board R-ONE statistic table. Use after getRebStatisticTables to find DTACYCLE_CD, GRP_ID, CLS_ID, ITM_ID and other item identifiers.",
+    "query_parameters": [
+      "STATBL_ID",
+      "pIndex",
+      "pSize"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "STATBL_ID": {
+          "type": "string",
+          "description": "Statistic table ID."
+        },
+        "pIndex": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page index."
+        },
+        "pSize": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Page size."
+        }
+      },
+      "required": [
+        "STATBL_ID"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getRebStatisticData",
+    "domain": "entity",
+    "method": "GET",
+    "path": "/real-estate/reb/data",
+    "description": "Get Korea Real Estate Board R-ONE statistic data. Use after table/item lookup to retrieve R-ONE real estate statistics such as housing price index or transaction statistics.",
+    "query_parameters": [
+      "STATBL_ID",
+      "DTACYCLE_CD",
+      "WRTTIME_IDTFR_ID",
+      "GRP_ID",
+      "CLS_ID",
+      "ITM_ID",
+      "START_WRTTIME",
+      "END_WRTTIME",
+      "pIndex",
+      "pSize"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "STATBL_ID": {
+          "type": "string",
+          "description": "Statistic table ID."
+        },
+        "DTACYCLE_CD": {
+          "type": "string",
+          "description": "Data cycle code."
+        },
+        "WRTTIME_IDTFR_ID": {
+          "type": "string",
+          "description": "Data writing time identifier."
+        },
+        "GRP_ID": {
+          "type": "string",
+          "description": "Group ID."
+        },
+        "CLS_ID": {
+          "type": "string",
+          "description": "Classification ID."
+        },
+        "ITM_ID": {
+          "type": "string",
+          "description": "Item ID."
+        },
+        "START_WRTTIME": {
+          "type": "string",
+          "description": "Start writing time."
+        },
+        "END_WRTTIME": {
+          "type": "string",
+          "description": "End writing time."
+        },
+        "pIndex": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Page index."
+        },
+        "pSize": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Page size."
+        }
+      },
+      "required": [
+        "STATBL_ID",
+        "DTACYCLE_CD"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getBokStatisticTables",
+    "domain": "entity",
+    "method": "GET",
+    "path": "/bok/statistics/tables",
+    "description": "Search Bank of Korea ECOS statistic tables. Use first for BOK ECOS statistics to find statistic table codes by keyword such as 금리, 환율, 물가.",
+    "query_parameters": [
+      "query",
+      "stat_code",
+      "start",
+      "end"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Search keyword, e.g. 금리, 환율, 물가."
+        },
+        "stat_code": {
+          "type": "string",
+          "description": "Optional statistic table code."
+        },
+        "start": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Start row."
+        },
+        "end": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "End row."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getBokStatisticItems",
+    "domain": "entity",
+    "method": "GET",
+    "path": "/bok/statistics/items",
+    "description": "List items for a Bank of Korea ECOS statistic table. Use after getBokStatisticTables to find item codes needed for statistic search.",
+    "query_parameters": [
+      "stat_code",
+      "start",
+      "end"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "stat_code": {
+          "type": "string",
+          "description": "BOK ECOS statistic table code."
+        },
+        "start": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Start row."
+        },
+        "end": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "End row."
+        }
+      },
+      "required": [
+        "stat_code"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "searchBokStatistics",
+    "domain": "entity",
+    "method": "GET",
+    "path": "/bok/statistics/search",
+    "description": "Get Bank of Korea ECOS statistic data. Use for BOK ECOS statistics data after identifying stat_code and item codes.",
+    "query_parameters": [
+      "stat_code",
+      "period",
+      "start_time",
+      "end_time",
+      "item_code1",
+      "item_code2",
+      "item_code3",
+      "item_code4"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "stat_code": {
+          "type": "string",
+          "description": "BOK ECOS statistic table code."
+        },
+        "period": {
+          "type": "string",
+          "enum": [
+            "A",
+            "S",
+            "Q",
+            "M",
+            "SM",
+            "D"
+          ],
+          "description": "Period: A yearly, Q quarterly, M monthly, D daily, etc."
+        },
+        "start_time": {
+          "type": "string",
+          "description": "Start time, e.g. 202401 or 20240101."
+        },
+        "end_time": {
+          "type": "string",
+          "description": "End time, e.g. 202412 or 20241231."
+        },
+        "item_code1": {
+          "type": "string",
+          "description": "Statistic item code 1."
+        },
+        "item_code2": {
+          "type": "string",
+          "description": "Statistic item code 2."
+        },
+        "item_code3": {
+          "type": "string",
+          "description": "Statistic item code 3."
+        },
+        "item_code4": {
+          "type": "string",
+          "description": "Statistic item code 4."
+        }
+      },
+      "required": [
+        "stat_code",
+        "period",
+        "start_time",
+        "end_time"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "getBokKeyStatistics",
+    "domain": "entity",
+    "method": "GET",
+    "path": "/bok/statistics/top100",
+    "description": "Get Bank of Korea ECOS top 100 key statistics. Use for quick lookup of BOK 100 key economic indicators.",
+    "query_parameters": [
+      "start",
+      "end"
+    ],
+    "body": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Start row."
+        },
+        "end": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "End row."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  }
+]
