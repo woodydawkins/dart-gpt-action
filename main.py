@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, Query, HTTPException, Body
 from dotenv import load_dotenv
 from typing import Any, Optional
-from urllib.parse import unquote
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, unquote, urlsplit
 
 load_dotenv()
 
@@ -4648,59 +4649,257 @@ def get_tax_law_package(
     }
 
 
+def _law_date(value: Any) -> Optional[str]:
+    value = str(value or "")
+    if not re.fullmatch(r"[0-9]{8}", value):
+        return None
+    try:
+        datetime.strptime(value, "%Y%m%d")
+    except ValueError:
+        return None
+    return value
+
+
+def _select_dated_tax_law(name: str, as_of: str) -> dict[str, Any]:
+    # eflaw defaults can exclude history; efYd is a range, not an as-of date.
+    # Read every returned page because multiple amendments can share a date.
+    size = 100
+    target = TAX_LAW_TARGETS["current_law_by_enforcement_date"]
+    params = {"nw": "1,2,3", "efYd": f"19000101~{as_of}"}
+    candidates = {}
+    total = None
+    seen = set()
+    for page in range(1, 21):
+        result = call_law_search_target(
+            target=target, query=f'"{name}"', search=1, display=size,
+            page=page, sort="efdes", response_type="JSON", extra_params=params,
+        )
+        data = result.get("data")
+        root = data.get("LawSearch") if isinstance(data, dict) else None
+        try:
+            count = int(root["totalCnt"])
+            returned_page = int(root["page"])
+        except (TypeError, KeyError, ValueError):
+            raise HTTPException(502, "법령 연혁 조회 응답의 페이지 정보를 확인하지 못했습니다.")
+        if (count < 0 or count > 20 * size or returned_page != page
+                or (total is not None and total != count)):
+            raise HTTPException(502, "법령 연혁 목록의 완전성을 확인하지 못했습니다.")
+        total = count
+        items = normalize_law_search_response(data)
+        if len(items) != min(size, max(0, total - (page - 1) * size)):
+            raise HTTPException(502, "법령 연혁 목록에 누락된 결과가 있습니다.")
+        page_keys = {
+            (str(item.get("mst")), str(item.get("law_id")), str(item.get("enforcement_date")))
+            for item in items
+        }
+        if seen.intersection(page_keys):
+            raise HTTPException(502, "법령 연혁 페이지에 중복된 결과가 있습니다.")
+        seen.update(page_keys)
+        for item in items:
+            if normalize_text(item.get("law_name")) != name:
+                continue
+            effective = _law_date(item.get("enforcement_date"))
+            promulgated = _law_date(item.get("promulgation_date"))
+            raw = item["raw"]
+            if not (effective and promulgated and raw.get("공포번호")
+                    and re.fullmatch(r"[0-9]+", str(item.get("mst") or ""))
+                    and re.fullmatch(r"[0-9]+", str(item.get("law_id") or ""))):
+                raise HTTPException(502, "법령 연혁 결과의 식별 정보가 불완전합니다.")
+            if effective <= as_of:
+                candidates[(effective, promulgated, str(item["mst"]))] = item
+        if page * size >= total:
+            break
+    if not candidates:
+        raise HTTPException(404, f"{name}의 기준일 시행본을 확인하지 못했습니다.")
+    latest = max(key[:2] for key in candidates)
+    matching = [item for key, item in candidates.items() if key[:2] == latest]
+    if len(matching) != 1:
+        raise HTTPException(502, "같은 시행일·공포일의 복수 시행본을 구별할 수 없습니다.")
+    selected = matching[0]
+    if selected.get("revision_type") in ("폐지", "타법폐지"):
+        raise HTTPException(404, f"{name}은 기준일에 폐지된 법령입니다.")
+    return selected
+
+
+def _guard_future_whole_article_phase(basic, jo, as_of):
+    """Reject a contradictory future whole-article entry, not future subparts."""
+    phase_text = basic.get("조문시행일자문자열")
+    if not isinstance(phase_text, str):
+        return
+    article = f"제{int(jo[:4])}조"
+    branch = int(jo[4:])
+    if branch:
+        article += f"의{branch}"
+    # Date headers may immediately follow the preceding article branch digit.
+    headers = list(re.finditer(r"([0-9]{8})\s*:", phase_text))
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(phase_text)
+        refs = {re.sub(r"\s+", "", v) for v in phase_text[header.end():end].split(",")}
+        if article not in refs:
+            continue
+        phase = _law_date(header.group(1))
+        if not phase or phase > as_of:
+            raise HTTPException(502, "요청 조문의 별도 시행일과 기준일을 대조할 수 없습니다. 연혁 본문과 부칙을 확인하세요.")
+
+
+def _validate_dated_tax_article(detail, selected, jo, as_of):
+    data = detail.get("data")
+    law = data.get("법령") if isinstance(data, dict) else None
+    law = law if isinstance(law, dict) else {}
+    basic = law.get("기본정보")
+    basic = basic if isinstance(basic, dict) else {}
+    raw = selected["raw"]
+    def number(value):
+        return str(value or "").lstrip("0")
+    if not (
+        normalize_text(basic.get("법령명_한글")) == normalize_text(selected["law_name"])
+        and number(basic.get("법령ID")) == number(selected["law_id"])
+        and _law_date(basic.get("공포일자")) == selected["promulgation_date"]
+        and number(basic.get("공포번호")) == number(raw.get("공포번호"))
+        and _law_date(basic.get("시행일자")) == selected["enforcement_date"]
+    ):
+        raise HTTPException(502, "반환된 본문이 선택한 법령 및 시행일과 일치하지 않습니다.")
+    section = law.get("조문")
+    articles = section.get("조문단위") if isinstance(section, dict) else None
+    articles = [articles] if isinstance(articles, dict) else articles
+    if not isinstance(articles, list):
+        raise HTTPException(404, "해당 시행본에서 요청한 조문을 확인하지 못했습니다.")
+    targets = [item for item in articles if (
+        isinstance(item, dict) and item.get("조문여부") in ("조문", "전문")
+        and number(item.get("조문번호")) == number(jo[:4])
+        and number(item.get("조문가지번호")) == number(jo[4:])
+    )]
+    article_dates = [_law_date(item.get("조문시행일자")) for item in targets]
+    if not article_dates:
+        raise HTTPException(404, "해당 시행본에서 요청한 조문을 확인하지 못했습니다.")
+    _guard_future_whole_article_phase(basic, jo, as_of)
+    if any(not day or day > as_of for day in article_dates):
+        raise HTTPException(502, "요청 조문의 시행일이 누락되었거나 기준일보다 늦습니다.")
+
+
+class _DatedLawFrameParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.sources = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "iframe":
+            return
+        ids = [value for key, value in attrs if key == "id"]
+        if "lawService" in ids:
+            sources = [value for key, value in attrs if key == "src"]
+            self.sources.append(sources[0] if ids == ["lawService"] and len(sources) == 1 else None)
+
+
+def _validate_dated_output_format(detail, json_detail, selected, jo, as_of, kind):
+    data = detail.get("data")
+    source = data.get("text") if isinstance(data, dict) else None
+    invalid = HTTPException(502, "요청한 응답 형식에서 선택한 시행본을 확인하지 못했습니다.")
+    if not isinstance(source, str) or not source:
+        raise invalid
+    if kind == "XML":
+        try:
+            # Provider output needs no document type or external entities.
+            if re.search(r"<!\s*(?:DOCTYPE|ENTITY)\b", source, re.I):
+                raise invalid
+            tree = ET.fromstring(source)
+        except ET.ParseError:
+            raise invalid
+        if tree.tag != "법령":
+            raise invalid
+        basic = tree.find("기본정보")
+        units = tree.findall("조문/조문단위")
+        translated = {"data": {"법령": {
+            "기본정보": {key: basic.findtext(key) for key in (
+                "법령명_한글", "법령ID", "공포일자", "공포번호", "시행일자"
+            )} if basic is not None else {},
+            "조문": {"조문단위": [{key: unit.findtext(key) for key in (
+                "조문여부", "조문번호", "조문가지번호", "조문시행일자"
+            )} for unit in units]},
+        }}}
+        _validate_dated_tax_article(translated, selected, jo, as_of)
+        # Require matching operative content as well as response metadata. JSON and
+        # XML may differ in line wrapping and JSON container keys.
+        def joined(value):
+            if isinstance(value, str):
+                return re.sub(r"\s+", "", value)
+            if isinstance(value, list):
+                return "".join(joined(item) for item in value)
+            if isinstance(value, dict):
+                return "".join(joined(value[key]) for key in (
+                    "조문내용", "항내용", "호내용", "목내용", "항", "호", "목"
+                ) if key in value)
+            return ""
+        def matches(number, branch, kind):
+            return (kind in ("조문", "전문") and str(number or "").lstrip("0") == jo[:4].lstrip("0")
+                    and str(branch or "").lstrip("0") == jo[4:].lstrip("0"))
+        expected = json_detail["data"]["법령"]["조문"]["조문단위"]
+        expected = [expected] if isinstance(expected, dict) else expected
+        expected = {joined(unit) for unit in expected if isinstance(unit, dict) and matches(
+            unit.get("조문번호"), unit.get("조문가지번호"), unit.get("조문여부")
+        )}
+        actual = set()
+        def from_xml(unit):
+            return "".join(re.sub(r"\s+", "", "".join(child.itertext()))
+                           for child in unit.iter() if child.tag in (
+                               "조문내용", "항내용", "호내용", "목내용"
+                           ))
+        for unit in units:
+            if matches(unit.findtext("조문번호"), unit.findtext("조문가지번호"), unit.findtext("조문여부")):
+                actual.add(from_xml(unit))
+        if not expected or "" in expected or expected != actual:
+            raise HTTPException(502, "XML 조문 내용이 검증된 JSON 조문과 일치하지 않습니다.")
+        return
+    parser = _DatedLawFrameParser()
+    parser.feed(source)
+    parser.close()
+    if len(parser.sources) != 1 or not parser.sources[0]:
+        raise invalid
+    try:
+        frame = urlsplit(parser.sources[0])
+        values = parse_qs(frame.query, keep_blank_values=True)
+    except ValueError:
+        raise invalid
+    if (frame.scheme != "https" or frame.netloc != "www.law.go.kr"
+            or frame.path != "/LSW/lsInfoP.do" or frame.fragment
+            or any(values.get(key) != [str(value)] for key, value in (
+                ("lsiSeq", selected["mst"]), ("efYd", selected["enforcement_date"]),
+                ("joNo", jo[:4]), ("joBrNo", jo[4:]),
+            ))):
+        raise invalid
+
+
 @app.get("/tax/laws/effective-article")
 def get_tax_law_effective_article(
     law_name: str = Query(..., description="세법명 또는 약칭. 예: 법인세법, 소득세법, 조특법"),
     article_no: str = Query(..., description="조문번호. 예: 18, 18-2, 제18조의2"),
-    effective_date: str = Query(..., description="시행일 또는 검토 기준일 YYYYMMDD. 예: 20220101"),
+    effective_date: str = Query(..., description="검토 기준일 YYYYMMDD. 예: 20220101"),
     response_type: str = Query("JSON", description="응답 형식: JSON, XML, HTML")
 ):
-    """
-    특정 시행일/기준일의 조세법령 조문 조회.
-    먼저 target=eflaw 목록에서 해당 시행일 법령을 찾고, lawService.do에 efYd와 JO를 함께 전달합니다.
-    """
-    resolved_law_name = resolve_tax_law_name(law_name)
-
-    laws = search_law_items(
-        query=resolved_law_name,
-        search=1,
-        display=10,
-        page=1,
-        sort="lasc",
-        target=TAX_LAW_TARGETS["current_law_by_enforcement_date"],
-        extra_params={"efYd": effective_date},
-    )
-
-    selected_law = find_first_law(laws, resolved_law_name)
-    if not selected_law:
-        # eflaw에서 못 찾으면 일반 law 검색으로 fallback
-        laws = search_law_items(query=resolved_law_name, search=1, display=10, page=1, sort="lasc", target="law")
-        selected_law = find_first_law(laws, resolved_law_name)
-
-    if not selected_law:
-        raise HTTPException(status_code=404, detail=f"{law_name}에 해당하는 법령을 찾지 못했습니다.")
-
-    law_id = selected_law.get("law_id")
-    mst = selected_law.get("mst")
+    """검토 기준일에 시행 중인 법령 버전의 조문을 조회합니다."""
+    effective_date = _law_date(effective_date)
+    if not effective_date or effective_date < "19000101":
+        raise HTTPException(400, "검토 기준일은 유효한 YYYYMMDD 날짜여야 합니다.")
+    response_type = response_type.upper()
+    if response_type not in ("JSON", "XML", "HTML"):
+        raise HTTPException(400, "response_type은 JSON, XML, HTML 중 하나여야 합니다.")
+    resolved_law_name = normalize_text(resolve_tax_law_name(law_name))
     jo = format_jo(article_no)
-
-    extra_params = {
-        "JO": jo,
-        "efYd": effective_date,
-    }
-    if law_id:
-        extra_params["ID"] = law_id
-    elif mst:
-        extra_params["MST"] = mst
-    else:
-        raise HTTPException(status_code=502, detail="법령 검색 결과에 law_id 또는 mst가 포함되어 있지 않습니다.")
-
+    selected_law = _select_dated_tax_law(resolved_law_name, effective_date)
     detail = call_law_service_target(
-        target="law",
-        response_type=response_type,
-        extra_params=extra_params,
+        target="eflaw",
+        response_type="JSON",
+        extra_params={"JO": jo, "MST": selected_law["mst"], "efYd": selected_law["enforcement_date"]},
     )
-
+    _validate_dated_tax_article(detail, selected_law, jo, effective_date)
+    if response_type != "JSON":
+        formatted = call_law_service_target(
+            target="eflaw", response_type=response_type, extra_params={
+                "JO": jo, "MST": selected_law["mst"], "efYd": selected_law["enforcement_date"],
+            },
+        )
+        _validate_dated_output_format(formatted, detail, selected_law, jo, effective_date, response_type)
+        detail = formatted
     return {
         "input_law_name": law_name,
         "resolved_law_name": resolved_law_name,
@@ -4709,11 +4908,10 @@ def get_tax_law_effective_article(
         "jo": jo,
         "selected_law": selected_law,
         "detail": detail,
-        "note": (
-            "시행일 기준 조회는 API의 efYd 지원 여부와 법령별 연혁 데이터 상태에 따라 결과가 달라질 수 있습니다. "
-            "세무 판단 시 거래일, 과세기간, 시행일, 부칙 적용 여부를 함께 확인하세요."
-        ),
+        "note": "기준일 시행본입니다. 거래일·과세기간별 적용례와 경과조치는 부칙에서 별도로 확인하세요.",
     }
+
+
 
 
 @app.get("/tax/laws/history")
